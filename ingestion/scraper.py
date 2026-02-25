@@ -17,7 +17,7 @@ async def fetch_category_members(category: str, limit: int = 500) -> List[Dict[s
     logger.info(f"Fetching category members for '{category}'")
     members = []
     cmcontinue = None
-    headers = {"User-Agent": "TerrariaAgenticBot/1.0 (school project) (contact: r.dingal.548395@umindanao.edu.ph)"}
+    headers = {"User-Agent": "TerrariaAgenticBot/1.0 (school) (contact: r.dingal.548395@umindanao.edu.ph)"}
     async with httpx.AsyncClient(headers=headers) as client:
         while True:
             params = {

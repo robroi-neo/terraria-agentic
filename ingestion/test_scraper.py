@@ -2,7 +2,7 @@ import asyncio
 from ingestion.scraper import scrape_category, scrape_all_categories
 
 async def test_single_category():
-    category = "Terraria"  # pick a known Terraria Wiki category
+    category = "Boss_NPCs"  # pick a known Terraria Wiki category
     articles = await scrape_category(category)
     print(f"Scraped {len(articles)} articles from category '{category}'\n")
     # Print sample
@@ -10,7 +10,7 @@ async def test_single_category():
         print("Title:", article["title"])
         print("PageID:", article["pageid"])
         print("Last Updated:", article["last_updated"])
-        print("WikiText snippet:", article["wikitext"][:2000])
+        print("WikiText snippet:", article["wikitext"][:4000])
         print("-" * 40)
         
 
