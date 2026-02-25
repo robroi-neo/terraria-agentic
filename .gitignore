@@ -1,2 +1,3 @@
 # Ignore .env secrets
 .env
+__pycache__/
