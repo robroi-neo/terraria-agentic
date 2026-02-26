@@ -5,7 +5,7 @@ Uses tiktoken for tokenization.
 from typing import List, Dict, Any
 from tiktoken import get_encoding
 from loguru import logger
-from ..config import CHUNK_SIZE, CHUNK_OVERLAP
+from config import CHUNK_SIZE, CHUNK_OVERLAP
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP, encoding_name: str = "cl100k_base") -> List[str]:
     """
@@ -29,7 +29,7 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Chunk a single article dict into a list of chunk dicts with metadata.
     """
-    text = article.get("wikitext", "")
+    text = article.get("cleaned_text", "")
     if not text:
         return []
     chunks = chunk_text(text)

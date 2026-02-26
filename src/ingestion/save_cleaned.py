@@ -39,7 +39,7 @@ def save_articles_to_db(articles, db_path=DB_PATH):
     conn.close()
 
 async def main():
-    category = "Store_pages"  # Change as needed
+    category = "Terraria"  # Change as needed
     print(f"Scraping category: {category}")
     articles = await scrape_category(category)
     print(f"Cleaning {len(articles)} articles...")
