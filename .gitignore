@@ -1,6 +1,8 @@
 # Ignore .env secrets
 .env
 __pycache__/
+
+# Databases
 test_cleaned_articles.db
 cleaned_articles.db
 chromadb/
