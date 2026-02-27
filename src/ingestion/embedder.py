@@ -14,6 +14,7 @@ from loguru import logger
 # BGE Embedder
 # ---------------------------------------------------------------------------
 
+# Add to config...
 BGE_MODEL_NAME = "BAAI/bge-base-en-v1.5"
 
 # BGE models perform best with this instruction prefix for passage embedding.

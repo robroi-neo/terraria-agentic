@@ -17,6 +17,10 @@ ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-3-5")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 
+# Google API
+GEMINI_API_KEY: str = os.getenv("GEMINIT_API_KEY", "")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "")
+
 # ChromaDB
 CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
