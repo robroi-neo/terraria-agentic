@@ -15,10 +15,15 @@ A question is INSUFFICIENT if it is:
 - Too vague (e.g. "how do I beat it?" — beat what?)
 - Missing key context (e.g. "what's the best sword?" — for which stage of the game?)
 - Ambiguous between multiple game mechanics
+- Does not mention what is their world difficulty (e.g. "Expert Mode or Normal Mode")
+- Does not clarify the player's class (e.g. "Ranger, Melee, Summoner, Mage")
 
 A question is SUFFICIENT if it clearly identifies:
 - A specific item, boss, biome, mechanic, or crafting recipe
 - Enough context to retrieve a targeted answer
+- The world difficulty is mentioned (e.g. "Expert Mode" or "Normal Mode")
+- The player's class is mentioned (e.g. "Ranger", "Melee", "Summoner", "Mage")
+
 
 Respond in JSON:
 {
@@ -70,7 +75,7 @@ User: "whats good for early hardmode melee"
 Rewritten: "early Hardmode melee weapons and armor progression guide"
 
 User: "best yoyo in the game"
-Rewritten: "strongest yoyo weapons in Terraria including Terrarian and Cascade stats and crafting"
+Rewritten: "strongest yoyo weapons in Terraria"
 """
 
 GRADER_SYSTEM_PROMPT = """

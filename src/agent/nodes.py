@@ -37,7 +37,7 @@ from config import REQUEST_PER_MINUTE
 # Rate Limiter for LLM requests
 # ---------------------------------------------------------------------------
 class RequestRateLimiter:
-    def __init__(self, max_REQUEST_PER_MINUTE=5):
+    def __init__(self, max_REQUEST_PER_MINUTE=100):
         self.max_requests = max_REQUEST_PER_MINUTE
         self.request_times = []
         self.lock = asyncio.Lock()
@@ -195,6 +195,10 @@ async def retrieve(state: AgentState) -> AgentState:
     chunks = await indexer.query(query_vector, n_results=5)
 
     logger.info(f"[retrieve] Retrieved {len(chunks)} chunks")
+    for i, chunk in enumerate(chunks):
+        title = chunk.get('page_title', '[No Title]')
+        text = chunk.get('text', '[No Text]')
+        logger.info(f"[retrieve] Chunk {i+1}: Title: {title}\nText: {text}\n{'-'*40}")
 
     return {**state, "retrieved_chunks": chunks}
 

@@ -7,7 +7,6 @@ from src.agent.nodes import (
     clarify_query,
     rewrite_query,
     retrieve,
-    grade_documents,
     generate_answer,
 )
 
@@ -67,7 +66,6 @@ def build_graph() -> StateGraph:
     graph.add_node("clarify_query",   clarify_query)
     graph.add_node("rewrite_query",   rewrite_query)
     graph.add_node("retrieve",        retrieve)
-    graph.add_node("grade_documents", grade_documents)
     graph.add_node("generate_answer", generate_answer)
 
     # -----------------------------------------------------------------------
@@ -103,18 +101,8 @@ def build_graph() -> StateGraph:
     # rewrite_query → always goes to retrieve
     graph.add_edge("rewrite_query", "retrieve")
 
-    # retrieve → always goes to grade_documents
-    graph.add_edge("retrieve", "grade_documents")
-
-    # grade_documents → branches based on chunk quality and retry count
-    graph.add_conditional_edges(
-        "grade_documents",
-        decide_after_grading,
-        {
-            "rewrite_query":   "rewrite_query",  # retry loop
-            "generate_answer": "generate_answer",
-        }
-    )
+    # retrieve → always goes to generate_answer
+    graph.add_edge("retrieve", "generate_answer")
 
     # generate_answer → always ends
     graph.add_edge("generate_answer", END)
