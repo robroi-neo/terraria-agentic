@@ -9,21 +9,19 @@ from typing import List
 # Load environment variables from .env file
 load_dotenv()
 
-# Anthropic API
-ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-3-5")
-
-# OpenAI API
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-
 # Google API
-GEMINI_API_KEY: str = os.getenv("GEMINIT_API_KEY", "")
+GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "")
+
+# EMBEDDER MODEL
+EMBEDDER_MODEL: str = os.getenv("EMBEDDER_MODEL", "")
 
 # ChromaDB
 CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
+
+# RATE LIMIT
+REQUESTS_PER_MINUTE: str = os.getenv("REQUEST_PER_MINUTE","5")
 
 # MediaWiki API
 MEDIAWIKI_API_URL: str = os.getenv("MEDIAWIKI_API_URL", "https://terraria.wiki.gg/api.php")
@@ -54,8 +52,10 @@ tenacity_kwargs = {
 }
 
 # Safety checks
-'''
-if not ANTHROPIC_API_KEY:
-    raise RuntimeError("ANTHROPIC_API_KEY is required in .env")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY is required in .env")'''
+
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY is required in .env")
+if not GEMINI_MODEL:
+    raise RuntimeError("GEMINI_MODEL is required in .env")
+if not EMBEDDER_MODEL:
+    raise RuntimeError("EMBEDDER_MODEL is required in .env")

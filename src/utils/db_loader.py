@@ -4,6 +4,8 @@ from typing import List, Dict, Any
 DB_PATH = "cleaned_articles.db"
 TABLE_NAME = "articles"
 
+
+# SQLITE LOADER, CHROMA DB LOADER CAN BE FOUND IN INDEXER
 def load_articles_from_db(db_path: str = DB_PATH) -> List[Dict[str, Any]]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

@@ -9,13 +9,11 @@ from typing import List, Dict, Any
 import torch
 from transformers import AutoTokenizer, AutoModel
 from loguru import logger
+from config import EMBEDDER_MODEL
 
 # ---------------------------------------------------------------------------
 # BGE Embedder
 # ---------------------------------------------------------------------------
-
-# Add to config...
-BGE_MODEL_NAME = "BAAI/bge-base-en-v1.5"
 
 # BGE models perform best with this instruction prefix for passage embedding.
 # For queries, a different prefix ("Represent this sentence: ...") is used.
@@ -36,7 +34,7 @@ class BGEEmbedder:
 
     def __init__(
         self,
-        model_name: str = BGE_MODEL_NAME,
+        model_name: str = EMBEDDER_MODEL,
         device: str | None = None,
         batch_size: int = 32,
     ) -> None:
