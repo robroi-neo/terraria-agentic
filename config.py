@@ -21,7 +21,7 @@ CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
 
 # RATE LIMIT
-REQUESTS_PER_MINUTE: str = os.getenv("REQUEST_PER_MINUTE","5")
+REQUEST_PER_MINUTE: int = int(os.getenv("REQUEST_PER_MINUTE",5))
 
 # MediaWiki API
 MEDIAWIKI_API_URL: str = os.getenv("MEDIAWIKI_API_URL", "https://terraria.wiki.gg/api.php")

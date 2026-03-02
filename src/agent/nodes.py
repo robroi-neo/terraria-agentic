@@ -37,8 +37,8 @@ from config import REQUEST_PER_MINUTE
 # Rate Limiter for LLM requests
 # ---------------------------------------------------------------------------
 class RequestRateLimiter:
-    def __init__(self, max_requests_per_minute=5):
-        self.max_requests = max_requests_per_minute
+    def __init__(self, max_REQUEST_PER_MINUTE=5):
+        self.max_requests = max_REQUEST_PER_MINUTE
         self.request_times = []
         self.lock = asyncio.Lock()
 
@@ -57,7 +57,7 @@ class RequestRateLimiter:
             self.request_times.append(now)
 
 # Configurable rate limit (default: 5 requests/minute)
-rate_limiter = RequestRateLimiter(max_requests_per_minute=REQUESTS_PER_MINUTE)
+rate_limiter = RequestRateLimiter(max_REQUEST_PER_MINUTE=REQUEST_PER_MINUTE)
 
 llm = LLMProvider()
 embedder = BGEEmbedder()
