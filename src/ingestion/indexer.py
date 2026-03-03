@@ -28,15 +28,31 @@ class ChromaIndexer:
         """
         Add embedded chunks to ChromaDB collection.
         """
-        ids = [f"{c['page_title']}:{c['chunk_index']}" for c in chunks]
+        ids = [
+            f"{c.get('pageid', c['page_title'])}:{c.get('section_index', 0)}:{c['chunk_index']}"
+            for c in chunks
+        ]
         embeddings = [c["embedding"] for c in chunks]
-        metadatas = [{
-            "source_url": c["source_url"],
-            "page_title": c["page_title"],
-            "category": c["category"],
-            "chunk_index": c["chunk_index"],
-            "last_updated": c["last_updated"],
-        } for c in chunks]
+        metadatas = []
+        for c in chunks:
+            metadata = {
+                "source_url": c.get("source_url", ""),
+                "page_title": c.get("page_title", ""),
+                "category": c.get("category", ""),
+                "chunk_index": c.get("chunk_index", 0),
+                "last_updated": c.get("last_updated", ""),
+                "section_index": c.get("section_index", 0),
+                "section_title": c.get("section_title", ""),
+                "biome": c.get("biome"),
+                "hardmode": c.get("hardmode"),
+                "damage_type": c.get("damage_type"),
+            }
+            filtered = {
+                key: value
+                for key, value in metadata.items()
+                if value is not None and (not isinstance(value, str) or value != "")
+            }
+            metadatas.append(filtered)
         documents = [c["text"] for c in chunks]
 
         self.collection.add(
@@ -50,7 +66,7 @@ class ChromaIndexer:
     async def query(
         self,
         query_embedding: List[float],
-        n_results: int = 5,
+        n_results: int = 3,
         where: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """

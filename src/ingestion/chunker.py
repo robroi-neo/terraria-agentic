@@ -29,20 +29,51 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Chunk a single article dict into a list of chunk dicts with metadata.
     """
-    text = article.get("cleaned_text", "")
-    if not text:
-        return []
-    chunks = chunk_text(text)
+    sections = article.get("sections") or []
     chunk_dicts = []
-    for idx, chunk in enumerate(chunks):
-        chunk_dicts.append({
-            "text": chunk,
-            "chunk_index": idx,
-            "source_url": article.get("source_url", ""),
-            "page_title": article.get("title", ""),
-            "category": article.get("category", ""),
-            "last_updated": article.get("last_updated", ""),
-        })
+
+    if sections:
+        chunk_idx = 0
+        for section_index, section in enumerate(sections):
+            section_text = section.get("text", "")
+            if not section_text:
+                continue
+            section_chunks = chunk_text(section_text)
+            for chunk in section_chunks:
+                chunk_dicts.append({
+                    "text": chunk,
+                    "chunk_index": chunk_idx,
+                    "section_index": section_index,
+                    "section_title": section.get("title", "Untitled"),
+                    "source_url": article.get("source_url", ""),
+                    "page_title": article.get("title", ""),
+                    "pageid": article.get("pageid"),
+                    "category": article.get("category", ""),
+                    "last_updated": article.get("last_updated", ""),
+                    "biome": article.get("biome"),
+                    "hardmode": article.get("hardmode"),
+                    "damage_type": article.get("damage_type"),
+                })
+                chunk_idx += 1
+    else:
+        text = article.get("cleaned_text", "")
+        if not text:
+            return []
+        chunks = chunk_text(text)
+        for idx, chunk in enumerate(chunks):
+            chunk_dicts.append({
+                "text": chunk,
+                "chunk_index": idx,
+                "source_url": article.get("source_url", ""),
+                "page_title": article.get("title", ""),
+                "pageid": article.get("pageid"),
+                "category": article.get("category", ""),
+                "last_updated": article.get("last_updated", ""),
+                "biome": article.get("biome"),
+                "hardmode": article.get("hardmode"),
+                "damage_type": article.get("damage_type"),
+            })
+
     logger.info(f"Article '{article.get('title')}' split into {len(chunk_dicts)} chunks")
     return chunk_dicts
 
