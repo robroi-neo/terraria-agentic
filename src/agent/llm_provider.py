@@ -1,9 +1,11 @@
 import re
+import time
 import logging
 import ollama
+from config import OLLAMA_MODEL
 
 class LLMProvider:
-    def __init__(self, model_name: str = "llama3", temperature: float = 0.2):
+    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.2):
         self.model_name = model_name
         self.temperature = temperature
 

@@ -5,14 +5,31 @@ Fetches page lists and article content using the official JSON API.
 """
 import asyncio
 import re
+import random
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_fixed
 from typing import List, Dict, Any, Optional
 from loguru import logger
 
-from config import MEDIAWIKI_API_URL, MEDIAWIKI_CATEGORIES, tenacity_kwargs
+from config import (
+    MEDIAWIKI_API_URL,
+    MEDIAWIKI_CATEGORIES,
+    USER_AGENT,
+    REQUEST_FROM_EMAIL,
+    tenacity_kwargs,
+    SCRAPER_MAX_PAGEIDS_PER_REQUEST,
+    SCRAPER_HTML_CONCURRENCY,
+    SCRAPER_BATCH_DELAY_SECONDS,
+)
 from bs4 import BeautifulSoup
+
+
+def _request_headers() -> Dict[str, str]:
+    return {
+        "User-Agent": USER_AGENT,
+        "From": REQUEST_FROM_EMAIL,
+        "Accept": "application/json",
+    }
 
 def clean_section_html(section_html: str) -> str:
     """
@@ -113,24 +130,73 @@ def extract_infobox_and_sections(html: str) -> Dict[str, Any]:
 
     return {"infobox": infobox, "sections": sections}
 
-@retry(stop=stop_after_attempt(tenacity_kwargs["stop"]), wait=wait_fixed(tenacity_kwargs["wait"]))
+async def _get_json_with_backoff(
+    client: httpx.AsyncClient,
+    params: Dict[str, Any],
+    context: str,
+    timeout: int = 30,
+) -> Dict[str, Any]:
+    """
+    GET with 429-aware retry/backoff.
+    Honors Retry-After when present, otherwise uses exponential backoff.
+    """
+    attempts = tenacity_kwargs["stop"]
+    base_wait = max(1, tenacity_kwargs["wait"])
+    last_error: Optional[Exception] = None
+
+    for attempt in range(attempts):
+        try:
+            resp = await client.get(MEDIAWIKI_API_URL, params=params, timeout=timeout)
+        except httpx.RequestError as exc:
+            wait_seconds = int(base_wait * (2 ** attempt) + random.uniform(0, 1))
+            logger.warning(
+                f"Network error during {context}: {exc}. "
+                f"Attempt {attempt + 1}/{attempts}. Retrying in {wait_seconds}s."
+            )
+            await asyncio.sleep(wait_seconds)
+            last_error = exc
+            continue
+
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            return resp.json()
+
+        retry_after = resp.headers.get("Retry-After")
+        if retry_after and retry_after.isdigit():
+            wait_seconds = int(retry_after)
+        else:
+            wait_seconds = int(base_wait * (2 ** attempt) + random.uniform(0, 1))
+
+        logger.warning(
+            f"Rate limited (429) during {context}. "
+            f"Attempt {attempt + 1}/{attempts}. Waiting {wait_seconds}s before retry."
+        )
+        await asyncio.sleep(wait_seconds)
+
+    if last_error is not None:
+        raise last_error
+
+    raise httpx.HTTPStatusError(
+        f"Exceeded retry attempts due to 429 during {context}",
+        request=resp.request,
+        response=resp,
+    )
+
+
 async def fetch_page_html(pageid: int) -> Optional[str]:
     """
     Fetch the parsed HTML for a given pageid using MediaWiki API (action=parse).
     Returns HTML string or None if not found.
     """
     logger.info(f"Fetching parsed HTML for pageid={pageid}")
-    headers = {"User-Agent": "TerrariaAgenticBot/1.0 (contact: youremail@example.com)"}
-    async with httpx.AsyncClient(headers=headers) as client:
+    async with httpx.AsyncClient(headers=_request_headers()) as client:
         params = {
             "action": "parse",
             "pageid": pageid,
             "format": "json",
             "prop": "text",
         }
-        resp = await client.get(MEDIAWIKI_API_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await _get_json_with_backoff(client, params, f"fetch_page_html(pageid={pageid})")
         html = data.get("parse", {}).get("text", {}).get("*", None)
         if not html:
             logger.warning(f"No HTML found for pageid={pageid}")
@@ -138,7 +204,10 @@ async def fetch_page_html(pageid: int) -> Optional[str]:
         return html
 
 
-async def fetch_pages_html(pageids: List[int], concurrency: int = 10) -> Dict[int, Optional[str]]:
+async def fetch_pages_html(
+    pageids: List[int],
+    concurrency: int = SCRAPER_HTML_CONCURRENCY,
+) -> Dict[int, Optional[str]]:
     """
     Fetch parsed HTML for many pages with bounded concurrency.
     """
@@ -155,7 +224,6 @@ async def fetch_pages_html(pageids: List[int], concurrency: int = 10) -> Dict[in
     pairs = await asyncio.gather(*(_fetch(pageid) for pageid in pageids))
     return dict(pairs)
 
-@retry(stop=stop_after_attempt(tenacity_kwargs["stop"]), wait=wait_fixed(tenacity_kwargs["wait"]))
 async def fetch_category_members(category: str, limit: int = 500) -> List[Dict[str, Any]]:
     """
     Fetch all page members of a given category from the Terraria Wiki.
@@ -163,8 +231,7 @@ async def fetch_category_members(category: str, limit: int = 500) -> List[Dict[s
     logger.info(f"Fetching category members for '{category}'")
     members = []
     cmcontinue = None
-    headers = {"User-Agent": "TerrariaAgenticBot/1.0 (school) (contact: r.dingal.548395@umindanao.edu.ph)"}
-    async with httpx.AsyncClient(headers=headers) as client:
+    async with httpx.AsyncClient(headers=_request_headers()) as client:
         while True:
             params = {
                 "action": "query",
@@ -175,9 +242,7 @@ async def fetch_category_members(category: str, limit: int = 500) -> List[Dict[s
             }
             if cmcontinue:
                 params["cmcontinue"] = cmcontinue
-            resp = await client.get(MEDIAWIKI_API_URL, params=params, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
+            data = await _get_json_with_backoff(client, params, f"fetch_category_members(category={category})")
             members.extend(data["query"]["categorymembers"])
             cmcontinue = data.get("continue", {}).get("cmcontinue")
             if not cmcontinue:
@@ -187,17 +252,15 @@ async def fetch_category_members(category: str, limit: int = 500) -> List[Dict[s
 
 
 # MediaWiki API allows up to 50 pageids per request for normal users, 500 for bots. We'll use 50 for safety.
-MAX_PAGEIDS_PER_REQUEST = 50
+MAX_PAGEIDS_PER_REQUEST = SCRAPER_MAX_PAGEIDS_PER_REQUEST
 
-@retry(stop=stop_after_attempt(tenacity_kwargs["stop"]), wait=wait_fixed(tenacity_kwargs["wait"]))
 async def fetch_pages_content(pageids: List[int]) -> Dict[int, Optional[Dict[str, Any]]]:
     """
     Fetch the wikitext and metadata for a batch of page IDs.
     Returns a dict mapping pageid to page data (or None if not found).
     """
     logger.info(f"Fetching content for {len(pageids)} pageids")
-    headers = {"User-Agent": "TerrariaAgenticBot/1.0 (contact: youremail@example.com)"}
-    async with httpx.AsyncClient(headers=headers) as client:
+    async with httpx.AsyncClient(headers=_request_headers()) as client:
         params = {
             "action": "query",
             "pageids": "|".join(str(pid) for pid in pageids),
@@ -206,9 +269,7 @@ async def fetch_pages_content(pageids: List[int]) -> Dict[int, Optional[Dict[str
             "inprop": "url",
             "format": "json",
         }
-        resp = await client.get(MEDIAWIKI_API_URL, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        data = await _get_json_with_backoff(client, params, f"fetch_pages_content(pageids={len(pageids)})")
         pages = data["query"]["pages"]
         result = {}
         for pid in pageids:
@@ -284,6 +345,8 @@ async def scrape_category(category: str, visited=None) -> List[Dict[str, Any]]:
                 "damage_type": derived_metadata["damage_type"],
             }
             articles.append(article)
+        if SCRAPER_BATCH_DELAY_SECONDS > 0:
+            await asyncio.sleep(SCRAPER_BATCH_DELAY_SECONDS)
     # Recursively scrape subcategories
     for subcat in subcategories:
         logger.info(f"Recursively scraping subcategory '{subcat}' of '{category}'")

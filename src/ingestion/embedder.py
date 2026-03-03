@@ -11,27 +11,11 @@ from transformers import AutoTokenizer, AutoModel
 from loguru import logger
 from config import EMBEDDER_MODEL
 
-# ---------------------------------------------------------------------------
-# BGE Embedder
-# ---------------------------------------------------------------------------
-
-# BGE models perform best with this instruction prefix for passage embedding.
-# For queries, a different prefix ("Represent this sentence: ...") is used.
-BGE_PASSAGE_PREFIX = ""          # passages: no prefix needed for bge-base
+BGE_PASSAGE_PREFIX = ""
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 class BGEEmbedder:
-    """
-    Wraps BAAI/bge-base-en-v1.5 for generating 768-dimensional embeddings.
-
-    Usage
-    -----
-    embedder = BGEEmbedder()
-    vectors  = embedder.embed_passages(["text one", "text two"])
-    query_v  = embedder.embed_query("what is a sword?")
-    """
-
     def __init__(
         self,
         model_name: str = EMBEDDER_MODEL,
@@ -164,49 +148,3 @@ async def embed_and_index(
 
     await indexer.add_chunks(enriched)
     logger.info(f"Indexed {len(enriched)} embedded chunks into ChromaDB.")
-
-
-# ---------------------------------------------------------------------------
-# Standalone smoke-test / entry-point
-# ---------------------------------------------------------------------------
-
-async def _demo() -> None:
-    """
-    Quick smoke-test: embed two dummy chunks and query them back.
-    Run with:  python embedder.py
-    """
-    from src.ingestion.indexer import ChromaIndexer  # adjust import path as needed
-
-    embedder = BGEEmbedder()
-    indexer = ChromaIndexer()  # uses defaults from config
-
-    dummy_chunks: List[Dict[str, Any]] = [
-        {
-            "text": "The Iron Sword is a melee weapon crafted from Iron Bars.",
-            "chunk_index": 0,
-            "source_url": "https://terraria.wiki.gg/Iron_Sword",
-            "page_title": "Iron Sword",
-            "category": "Weapons",
-            "last_updated": "2024-01-01T00:00:00Z",
-        },
-        {
-            "text": "Terraria is a 2D sandbox adventure game developed by Re-Logic.",
-            "chunk_index": 0,
-            "source_url": "https://terraria.wiki.gg/Terraria",
-            "page_title": "Terraria",
-            "category": "General",
-            "last_updated": "2024-01-01T00:00:00Z",
-        },
-    ]
-
-    await embed_and_index(dummy_chunks, embedder, indexer)
-
-    # Query
-    query_vec = embedder.embed_query("rawr")
-    results = await indexer.query(query_vec, n_results=2)
-    for r in results:
-        print(f"[{r['page_title']}] dist={r['distance']:.4f} — {r['text'][:80]}")
-
-
-if __name__ == "__main__":
-    asyncio.run(_demo())
