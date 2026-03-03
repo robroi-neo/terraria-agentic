@@ -13,7 +13,8 @@ async def test_single_category():
         print("Title:", article["title"])
         print("PageID:", article["pageid"])
         print("Last Updated:", article["last_updated"])
-        print("WikiText snippet:", article["wikitext"][:4000])
+        print("Sections:", len(article.get("sections", [])))
+        print("Cleaned snippet:", (article.get("cleaned_text") or "")[:4000])
         print("-" * 40)
         
 
