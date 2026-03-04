@@ -15,8 +15,8 @@ import asyncio
 import os
 from typing import List
 
-from config import MEDIAWIKI_CATEGORIES
-from src.ingestion.scraper import scrape_category
+from config import MEDIAWIKI_CATEGORIES, SCRAPE_PAGES
+from src.ingestion.scraper import scrape_category, scrape_specific_pages
 from src.ingestion.chunker import chunk_articles
 from src.ingestion.embedder import BGEEmbedder, embed_and_index
 from src.ingestion.indexer import ChromaIndexer
@@ -51,20 +51,32 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional query string to run immediately after indexing as a smoke check.",
     )
+    parser.add_argument(
+        "--pages",
+        nargs="+",
+        default=None,
+        help="Specific page titles to scrape (in addition to or instead of categories).",
+    )
     return parser
 
 
-async def _scrape(categories: List[str]) -> List[dict]:
+
+async def _scrape(categories: List[str], pages: List[str]) -> List[dict]:
+    articles: List[dict] = []
     visited = set()
-    all_articles: List[dict] = []
-    for category in categories:
-        all_articles.extend(await scrape_category(category, visited))
-    return all_articles
+    if categories:
+        for category in categories:
+            articles.extend(await scrape_category(category, visited))
+    if pages:
+        articles.extend(await scrape_specific_pages(titles=pages))
+    return articles
 
 
 async def main() -> None:
     args = _build_parser().parse_args()
-    categories = args.categories or MEDIAWIKI_CATEGORIES
+
+    categories = args.categories if args.categories is not None else MEDIAWIKI_CATEGORIES
+    pages = args.pages if args.pages is not None else SCRAPE_PAGES
 
     print("[1/4] Initializing embedder and indexer...")
     embedder = BGEEmbedder()
@@ -75,51 +87,50 @@ async def main() -> None:
         indexer_kwargs["collection_name"] = args.collection
     indexer = ChromaIndexer(**indexer_kwargs)
 
-    print("[2/4] Processing categories incrementally...")
-    print(f"Categories: {categories}")
 
-    visited = set()
+    print("[2/4] Processing categories and/or specific pages...")
+    print(f"Categories: {categories}")
+    print(f"Specific pages: {pages}")
+
     total_articles = 0
     total_chunks = 0
-    failed_categories: List[str] = []
+    failed_sources: List[str] = []
 
-    for category in categories:
-        print(f"\n--- Category: {category} ---")
-        try:
-            articles = await scrape_category(category, visited)
-            if args.max_articles is not None:
-                articles = articles[: args.max_articles]
-            print(f"Scraped articles: {len(articles)}")
+    try:
+        articles = await _scrape(categories, pages)
+        if args.max_articles is not None:
+            articles = articles[: args.max_articles]
+        print(f"Scraped articles: {len(articles)}")
 
-            if not articles:
-                print("No articles found for this category, skipping.")
-                continue
+        if not articles:
+            print("No articles found, skipping chunking and indexing.")
+            raise RuntimeError("No articles were scraped from the provided categories/pages.")
 
-            chunks = chunk_articles(articles)
-            print(f"Generated chunks: {len(chunks)}")
-            if not chunks:
-                print("No chunks generated for this category, skipping.")
-                continue
+        chunks = chunk_articles(articles)
+        print(f"Generated chunks: {len(chunks)}")
+        if not chunks:
+            print("No chunks generated, skipping indexing.")
+            raise RuntimeError("No chunks were generated from the scraped articles.")
 
-            await embed_and_index(chunks, embedder, indexer)
-            total_articles += len(articles)
-            total_chunks += len(chunks)
-            current_count = await indexer.count()
-            print(f"Indexed category '{category}'. Collection count now: {current_count}")
-        except Exception as exc:
-            failed_categories.append(category)
-            print(f"Category '{category}' failed: {exc}")
+        await embed_and_index(chunks, embedder, indexer)
+        total_articles += len(articles)
+        total_chunks += len(chunks)
+        current_count = await indexer.count()
+        print(f"Indexed all articles. Collection count now: {current_count}")
+    except Exception as exc:
+        failed_sources.append(str(exc))
+        print(f"Ingestion failed: {exc}")
 
     if total_chunks == 0:
-        raise RuntimeError("No chunks were indexed. All categories failed or returned empty data.")
+        raise RuntimeError("No chunks were indexed. All categories/pages failed or returned empty data.")
 
     print("\n[3/4] Final index stats...")
     count = await indexer.count()
     print(f"Indexing complete. Collection count: {count}")
     print(f"Total processed articles: {total_articles}")
     print(f"Total processed chunks: {total_chunks}")
-    if failed_categories:
-        print(f"Failed categories: {failed_categories}")
+    if failed_sources:
+        print(f"Failed sources: {failed_sources}")
 
     print("[4/4] Optional smoke query...")
     if args.query_smoke:

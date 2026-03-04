@@ -19,11 +19,15 @@ EMBEDDER_MODEL: str = os.getenv("EMBEDDER_MODEL", "")
 CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
 
+
 # RATE LIMIT
 REQUEST_PER_MINUTE: int = int(os.getenv("REQUEST_PER_MINUTE",5))
 SCRAPER_MAX_PAGEIDS_PER_REQUEST: int = int(os.getenv("SCRAPER_MAX_PAGEIDS_PER_REQUEST", 50))
 SCRAPER_HTML_CONCURRENCY: int = int(os.getenv("SCRAPER_HTML_CONCURRENCY", 2))
 SCRAPER_BATCH_DELAY_SECONDS: float = float(os.getenv("SCRAPER_BATCH_DELAY_SECONDS", 0.75))
+
+# Retrieval config, this indicates how many chunks will be retrieved 
+RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", 3))
 
 # MediaWiki API
 MEDIAWIKI_API_URL: str = os.getenv("MEDIAWIKI_API_URL", "https://terraria.wiki.gg/api.php")
@@ -34,28 +38,32 @@ USER_AGENT: str = os.getenv(
 )
 REQUEST_FROM_EMAIL: str = os.getenv("REQUEST_FROM_EMAIL", "your-email@example.com")
 MEDIAWIKI_CATEGORIES: List[str] = [
-    "Crafting_material_items",
-    "Acquired_through",
-    "Ammunition_items",
-    "Armor_items",
-    "Hardmode-only_items",
-    "Healing_items",
-    "Informational_items",
-    "Miscellaneous_items",
-    "Consumable_items",
-    "Set_items",
-    "Storage_items",
-    "Summoning_items",
+    # To have info about bosses
+    "Boss_NPCs",
+    # To have info about summoned bosses
+    "Summoned_events",
+    # To have info about tools
     "Tool_items",
-    "Weapon_items",
-    "Key_items",
-    "Mechanism_items",
-    "Game_mechanics",
-    "Events",
-    "Crossover_content",
-    "Environments",
-    "Events",
-    "NPCs",
+    # includes boss summons
+    "Summoning_items",
+
+    # Difficulty Mode
+    "Expert_Mode_content",
+    "Journey_Mode_content",
+    "Master_Mode_content",
+]
+# List of specific page titles to scrape (optional, can be empty)
+SCRAPE_PAGES: List[str] = [
+    # Example: "Zenith", "Terra Blade", "Moon Lord"
+    "Terraria",
+    "Buffs",
+    "Debuffs",
+    "Bosses",
+    "Pre-Hardmode",
+    "Hardmode",
+    "Hardmode_conversion",
+    "Difficulty",
+    "Game_mechanics"
 ]
 
 # Chunking

@@ -6,3 +6,4 @@ __pycache__/
 test_cleaned_articles.db
 cleaned_articles.db
 chromadb/
+chromadb_v1/
