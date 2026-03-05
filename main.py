@@ -21,7 +21,7 @@ def build_initial_state(query: str, history: List) -> AgentState:
         "route": "rag",
         "clarification_needed": False,
         "clarification_question": None,
-        "conversation_history": history,
+        "conversation_history": list(history),
     }
 
 
@@ -60,23 +60,18 @@ async def chat():
 
         print_separator()
 
+        # Keep session memory from graph output
+        conversation_history = result.get("conversation_history", conversation_history)
+
         # Handle clarification
         if result.get("clarification_needed"):
             question = result["clarification_question"]
             print(f"Assistant: {question}")
-
-            # Append to history so next turn has context
-            conversation_history.append({"role": "user",      "content": user_input})
-            conversation_history.append({"role": "assistant", "content": question})
             continue
 
         # Handle normal answer
         answer = result.get("generation", "I was unable to find an answer.")
         print(f"Assistant: {answer}")
-
-        # Append completed exchange to history
-        conversation_history.append({"role": "user",      "content": user_input})
-        conversation_history.append({"role": "assistant", "content": answer})
 
 
 if __name__ == "__main__":

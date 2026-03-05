@@ -84,10 +84,17 @@ async def route_query(state: AgentState) -> AgentState:
     """
     logger.info(f"[route_query] Routing query: '{state['query']}'")
 
+    history = state.get("conversation_history", [])
+    user_message = (
+        f"Conversation so far:\n{json.dumps(history)}\n\nLatest query: {state['query']}"
+        if history
+        else state["query"]
+    )
+
     await rate_limiter.wait_for_slot()
     response = llm.complete(
         system=ROUTER_SYSTEM_PROMPT,
-        user=state["query"]
+        user=user_message
     )
 
     # Guard against non-JSON output
@@ -286,20 +293,23 @@ async def generate_answer(state: AgentState) -> AgentState:
     logger.info("[generate_answer] Generating final answer")
 
     chunks = state.get("graded_chunks") or []
+    history = state.get("conversation_history", [])
 
     # Format context block for the prompt
     if chunks:
         context = "\n\n---\n\n".join(
             f"[{c['page_title']}] {c['text']}" for c in chunks
         )
+        history_block = f"Conversation so far:\n{json.dumps(history)}\n\n" if history else ""
         user_message = (
-            f"Context from the Terraria wiki:\n\n{context}"
+            f"{history_block}Context from the Terraria wiki:\n\n{context}"
             f"\n\nQuestion: {state['query']}"
         )
     else:
         # Direct route or no relevant chunks found
+        history_block = f"Conversation so far:\n{json.dumps(history)}\n\n" if history else ""
         user_message = (
-            f"Question: {state['query']}\n\n"
+            f"{history_block}Question: {state['query']}\n\n"
             "(No wiki context available — answer from general knowledge if possible.)"
         )
 
@@ -309,6 +319,15 @@ async def generate_answer(state: AgentState) -> AgentState:
         user=user_message
     )
 
+    answer = response.strip()
     logger.info("[generate_answer] Answer generated successfully")
 
-    return {**state, "generation": response.strip()}
+    updated_history = list(history)
+    updated_history.append({"role": "user", "content": state["query"]})
+    updated_history.append({"role": "assistant", "content": answer})
+
+    return {
+        **state,
+        "generation": answer,
+        "conversation_history": updated_history,
+    }
