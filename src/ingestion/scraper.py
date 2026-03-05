@@ -365,3 +365,107 @@ async def scrape_all_categories(categories: List[str] = MEDIAWIKI_CATEGORIES) ->
         all_articles.extend(articles)
     logger.info(f"Total articles scraped: {len(all_articles)} (including subcategories)")
     return all_articles
+
+
+async def fetch_pageids_by_titles(titles: List[str]) -> Dict[str, int]:
+    """
+    Resolve page titles to their page IDs using the MediaWiki API.
+    Returns a dict mapping title -> pageid (only for pages that exist).
+    """
+    logger.info(f"Resolving {len(titles)} page titles to pageids")
+    result = {}
+    async with httpx.AsyncClient(headers=_request_headers()) as client:
+        # MediaWiki API accepts up to 50 titles per request
+        for i in range(0, len(titles), 50):
+            batch_titles = titles[i:i+50]
+            params = {
+                "action": "query",
+                "titles": "|".join(batch_titles),
+                "format": "json",
+            }
+            data = await _get_json_with_backoff(client, params, f"fetch_pageids_by_titles(batch {i//50 + 1})")
+            pages = data.get("query", {}).get("pages", {})
+            for page in pages.values():
+                if "missing" not in page and "pageid" in page:
+                    result[page["title"]] = page["pageid"]
+                elif "missing" in page:
+                    logger.warning(f"Page not found: {page.get('title', 'Unknown')}")
+    logger.info(f"Resolved {len(result)} page titles to pageids")
+    return result
+
+
+async def scrape_specific_pages(
+    titles: Optional[List[str]] = None,
+    pageids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Scrape specific pages by their titles or page IDs.
+    
+    Args:
+        titles: List of page titles to scrape (e.g., ["Zenith", "Terra Blade", "Moon Lord"])
+        pageids: List of page IDs to scrape directly
+        
+    Returns:
+        List of article dicts with metadata and content.
+    """
+    if not titles and not pageids:
+        logger.warning("No titles or pageids provided to scrape_specific_pages")
+        return []
+    
+    # Resolve titles to pageids if provided
+    all_pageids = list(pageids) if pageids else []
+    if titles:
+        title_to_pageid = await fetch_pageids_by_titles(titles)
+        all_pageids.extend(title_to_pageid.values())
+    
+    if not all_pageids:
+        logger.warning("No valid pageids found to scrape")
+        return []
+    
+    # Deduplicate pageids
+    all_pageids = list(set(all_pageids))
+    logger.info(f"Scraping {len(all_pageids)} specific pages")
+    
+    articles = []
+    for i in range(0, len(all_pageids), MAX_PAGEIDS_PER_REQUEST):
+        batch_ids = all_pageids[i:i+MAX_PAGEIDS_PER_REQUEST]
+        pages = await fetch_pages_content(batch_ids)
+        html_by_pageid = await fetch_pages_html(batch_ids)
+        
+        for pageid, page in pages.items():
+            if not page:
+                continue
+            page_html = html_by_pageid.get(pageid)
+            parsed = extract_infobox_and_sections(page_html) if page_html else {"infobox": {}, "sections": []}
+            cleaned_sections = []
+            for section in parsed["sections"]:
+                cleaned_text = clean_section_html(section["html"])
+                if cleaned_text:
+                    cleaned_sections.append({
+                        "title": section["title"] or "Untitled",
+                        "text": cleaned_text,
+                    })
+
+            derived_metadata = _extract_domain_metadata(parsed["infobox"])
+            article = {
+                "pageid": pageid,
+                "title": page["title"],
+                "category": "specific",  # Mark as manually specified
+                "source_url": page.get("fullurl", ""),
+                "last_updated": page["revisions"][0]["timestamp"] if page.get("revisions") else None,
+                "wikitext": page["revisions"][0]["*"] if page.get("revisions") and "*" in page["revisions"][0] else "",
+                "html": page_html or "",
+                "infobox": parsed["infobox"],
+                "sections": cleaned_sections,
+                "cleaned_text": "\n\n".join(section["text"] for section in cleaned_sections),
+                "biome": derived_metadata["biome"],
+                "hardmode": derived_metadata["hardmode"],
+                "damage_type": derived_metadata["damage_type"],
+            }
+            articles.append(article)
+        
+        if SCRAPER_BATCH_DELAY_SECONDS > 0:
+            await asyncio.sleep(SCRAPER_BATCH_DELAY_SECONDS)
+    
+    logger.info(f"Scraped {len(articles)} specific pages")
+    return articles

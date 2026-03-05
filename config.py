@@ -6,8 +6,13 @@ import os
 from dotenv import load_dotenv
 from typing import List
 
+
 # Load environment variables from .env file
 load_dotenv()
+
+# Determine environment
+ENV = os.getenv("ENV", "development")
+IS_DEVELOPMENT = ENV == "development"
 
 # Ollama
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
@@ -15,10 +20,17 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
 # EMBEDDER MODEL
 EMBEDDER_MODEL: str = os.getenv("EMBEDDER_MODEL", "")
 
+# Only load API keys if not in development
+if not IS_DEVELOPMENT:
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    HUGGINFACE_API_KEY: str = os.getenv("HUGGINFACE_API_KEY", "")
+else:
+    GROQ_API_KEY: str = None
+    HUGGINFACE_API_KEY: str = None
+
 # ChromaDB
 CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
-
 
 # RATE LIMIT
 REQUEST_PER_MINUTE: int = int(os.getenv("REQUEST_PER_MINUTE",5))
@@ -54,7 +66,6 @@ MEDIAWIKI_CATEGORIES: List[str] = [
 ]
 # List of specific page titles to scrape (optional, can be empty)
 SCRAPE_PAGES: List[str] = [
-    # Example: "Zenith", "Terra Blade", "Moon Lord"
     "Terraria",
     "Buffs",
     "Debuffs",
@@ -84,6 +95,5 @@ tenacity_kwargs = {
 }
 
 # Safety checks
-
 if not EMBEDDER_MODEL:
     raise RuntimeError("EMBEDDER_MODEL is required in .env")

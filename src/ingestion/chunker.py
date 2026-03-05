@@ -80,9 +80,24 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
 def chunk_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Chunk a list of article dicts into a flat list of chunk dicts.
+    Skips duplicate chunk IDs and logs a warning if found.
     """
     all_chunks = []
+    seen_ids = set()
+    duplicates = []
     for article in articles:
-        all_chunks.extend(chunk_article(article))
-    logger.info(f"Total chunks generated: {len(all_chunks)}")
+        for chunk in chunk_article(article):
+            # Build a unique chunk ID (e.g., pageid:section_index:chunk_index)
+            pageid = chunk.get("pageid")
+            section_index = chunk.get("section_index", 0)
+            chunk_index = chunk.get("chunk_index", 0)
+            chunk_id = f"{pageid}:{section_index}:{chunk_index}"
+            if chunk_id in seen_ids:
+                duplicates.append(chunk_id)
+                continue
+            seen_ids.add(chunk_id)
+            all_chunks.append(chunk)
+    if duplicates:
+        logger.warning(f"Skipped {len(duplicates)} duplicated chunk IDs: {', '.join(duplicates[:20])}{'...' if len(duplicates) > 20 else ''}")
+    logger.info(f"Total chunks generated (deduplicated): {len(all_chunks)}")
     return all_chunks

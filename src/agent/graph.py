@@ -13,7 +13,6 @@ from src.agent.nodes import (
 
 # ---------------------------------------------------------------------------
 # Conditional edge functions
-# These are pure routing decisions — no logic, no Claude, just state reads
 # ---------------------------------------------------------------------------
 
 def decide_after_routing(state: AgentState) -> str:

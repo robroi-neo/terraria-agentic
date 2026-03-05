@@ -29,7 +29,7 @@ from src.agent.prompts import (
 )
 from src.ingestion.embedder import BGEEmbedder
 from src.ingestion.indexer import ChromaIndexer
-from config import REQUEST_PER_MINUTE
+from config import REQUEST_PER_MINUTE, RETRIEVAL_TOP_K
 
 
 
@@ -135,13 +135,21 @@ async def clarify_query(state: AgentState) -> AgentState:
     clarification_question = parsed.get("clarification_question")
 
     logger.info(f"[clarify_query] Sufficient: {not clarification_needed}")
+    
+    # Build updated conversation history
+    updated_history = list(history)  # copy existing history
+    
     if clarification_needed:
         logger.info(f"[clarify_query] Asking user: '{clarification_question}'")
+        # Store the original query and clarification question in history
+        updated_history.append({"role": "user", "content": state["query"]})
+        updated_history.append({"role": "assistant", "content": clarification_question})
 
     return {
         **state,
         "clarification_needed": clarification_needed,
         "clarification_question": clarification_question,
+        "conversation_history": updated_history,
     }
 
 
@@ -160,10 +168,21 @@ async def rewrite_query(state: AgentState) -> AgentState:
     """
     logger.info(f"[rewrite_query] Rewriting query: '{state['query']}'")
 
+    # Include conversation history for full context (e.g., after clarification)
+    history = state.get("conversation_history", [])
+    if history:
+        # Combine history + latest query so rewriter has full context
+        user_message = (
+            f"Conversation so far:\n{json.dumps(history)}\n\n"
+            f"Latest query: {state['query']}"
+        )
+    else:
+        user_message = state["query"]
+
     await rate_limiter.wait_for_slot()
     response = llm.complete(
         system=REWRITER_SYSTEM_PROMPT,
-        user=state["query"]
+        user=user_message
     )
 
     # Expects plain text back — just the rewritten query string
@@ -191,8 +210,8 @@ async def retrieve(state: AgentState) -> AgentState:
     # Embed the query using your existing BGEEmbedder
     query_vector = embedder.embed_query(query_text)
 
-    # Fetch top-5 chunks from ChromaDB
-    chunks = await indexer.query(query_vector, n_results=5)
+    # Fetch top-K chunks from ChromaDB (configurable)
+    chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
 
     logger.info(f"[retrieve] Retrieved {len(chunks)} chunks")
     for i, chunk in enumerate(chunks):

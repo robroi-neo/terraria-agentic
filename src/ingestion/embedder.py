@@ -6,10 +6,12 @@ Integrates with the chunker pipeline and stores results in ChromaDB via ChromaIn
 import asyncio
 from typing import List, Dict, Any
 
+
 import torch
 from transformers import AutoTokenizer, AutoModel
 from loguru import logger
-from config import EMBEDDER_MODEL
+from config import EMBEDDER_MODEL, IS_DEVELOPMENT, HUGGINFACE_API_KEY
+import requests
 
 BGE_PASSAGE_PREFIX = ""
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
@@ -29,18 +31,24 @@ class BGEEmbedder:
         device     : 'cuda', 'mps', or 'cpu'. Auto-detected when None.
         batch_size : Number of texts to encode per forward pass.
         """
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.model_name = model_name
         self.batch_size = batch_size
 
-        logger.info(f"Loading BGE model '{model_name}' on device '{self.device}' ...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(self.device)
-        self.model.eval()
-        logger.info("BGE model loaded successfully.")
+        self.is_development = IS_DEVELOPMENT
+        if self.is_development:
+            self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+            logger.info(f"[DEV] Loading BGE model '{model_name}' on device '{self.device}' ...")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModel.from_pretrained(model_name).to(self.device)
+            self.model.eval()
+            logger.info("[DEV] BGE model loaded successfully.")
+        else:
+            logger.info("[PROD] Using Hugging Face Inference API for embeddings.")
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
 
     def _mean_pool_cls(self, model_output: Any, attention_mask: torch.Tensor) -> torch.Tensor:
         """
@@ -48,33 +56,51 @@ class BGEEmbedder:
         """
         return model_output.last_hidden_state[:, 0]  # (batch, hidden)
 
-    @torch.no_grad()
+
     def _encode(self, texts: List[str]) -> List[List[float]]:
-        """
-        Tokenise, forward-pass, and L2-normalise a list of texts.
-        Returns a list of plain Python float lists (ChromaDB-compatible).
-        """
-        all_embeddings: List[torch.Tensor] = []
-
-        for i in range(0, len(texts), self.batch_size):
-            batch = texts[i : i + self.batch_size]
-            encoded = self.tokenizer(
-                batch,
-                padding=True,
-                truncation=True,
-                max_length=512,
-                return_tensors="pt",
-            ).to(self.device)
-
-            output = self.model(**encoded)
-            embeddings = self._mean_pool_cls(output, encoded["attention_mask"])
-
-            # L2 normalisation (required by BGE for cosine similarity)
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-            all_embeddings.append(embeddings.cpu())
-
-        combined = torch.cat(all_embeddings, dim=0)  # (N, 768)
-        return combined.tolist()
+        if self.is_development:
+            # Local model
+            with torch.no_grad():
+                all_embeddings: List[torch.Tensor] = []
+                for i in range(0, len(texts), self.batch_size):
+                    batch = texts[i : i + self.batch_size]
+                    encoded = self.tokenizer(
+                        batch,
+                        padding=True,
+                        truncation=True,
+                        max_length=512,
+                        return_tensors="pt",
+                    ).to(self.device)
+                    output = self.model(**encoded)
+                    embeddings = self._mean_pool_cls(output, encoded["attention_mask"])
+                    embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+                    all_embeddings.append(embeddings.cpu())
+                combined = torch.cat(all_embeddings, dim=0)
+                return combined.tolist()
+        else:
+            # Use Hugging Face Inference API
+            api_url = f"https://router.huggingface.co/hf-inference/models/{self.model_name}"
+            headers = {"Authorization": f"Bearer {HUGGINFACE_API_KEY}"}
+            results = []
+            for text in texts:
+                response = requests.post(api_url, headers=headers, json={"inputs": text})
+                if response.status_code == 200:
+                    embedding = response.json()
+                    # If the output is nested (batch, seq_len, hidden), take [0][0] or flatten as needed
+                    if isinstance(embedding, list) and isinstance(embedding[0], list):
+                        # If output is [1, hidden]
+                        if len(embedding) == 1:
+                            embedding = embedding[0]
+                        # If output is [seq_len, hidden], take first token (CLS)
+                        elif len(embedding) > 1 and isinstance(embedding[0][0], float):
+                            embedding = embedding[0]
+                        elif len(embedding) > 1 and isinstance(embedding[0], list):
+                            embedding = embedding[0][0]
+                    results.append(embedding)
+                else:
+                    logger.error(f"Hugging Face API error: {response.status_code} {response.text}")
+                    results.append([0.0] * 768)  # fallback
+            return results
 
     # ------------------------------------------------------------------
     # Public API
@@ -109,6 +135,8 @@ class BGEEmbedder:
         768-dimensional float vector.
         """
         prefixed = BGE_QUERY_PREFIX + query
+        if not self.is_development:
+            logger.info("Embedding query using Hugging Face Inference API.")
         logger.info(f"Embedding query: '{query[:80]}...'")
         vector = self._encode([prefixed])[0]
         return vector
