@@ -1,9 +1,11 @@
 # Ignore .env secrets
 .env
 __pycache__/
+.pytest_cache
 
 # Databases
 test_cleaned_articles.db
 cleaned_articles.db
 chromadb/
 chromadb_v1/
+
