@@ -29,7 +29,7 @@ from src.agent.prompts import (
 )
 from src.ingestion.embedder import BGEEmbedder
 from src.ingestion.indexer import ChromaIndexer
-from config import REQUEST_PER_MINUTE, RETRIEVAL_TOP_K
+from config import RETRIEVAL_TOP_K
 
 
 
@@ -56,8 +56,9 @@ class RequestRateLimiter:
             self.request_times = [t for t in self.request_times if now - t < 60]
             self.request_times.append(now)
 
-# Configurable rate limit (default: 5 requests/minute)
-rate_limiter = RequestRateLimiter(max_REQUEST_PER_MINUTE=REQUEST_PER_MINUTE)
+# LLM pipeline rate limiter — uses class default (100 req/min).
+# REQUEST_PER_MINUTE in config.py is for the scraper only.
+rate_limiter = RequestRateLimiter()
 
 llm = LLMProvider()
 embedder = BGEEmbedder()
