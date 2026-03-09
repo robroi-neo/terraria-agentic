@@ -43,9 +43,9 @@ class ChromaIndexer:
                 "last_updated": c.get("last_updated", ""),
                 "section_index": c.get("section_index", 0),
                 "section_title": c.get("section_title", ""),
-                "biome": c.get("biome"),
+                "bosses": c.get("bosses"),
                 "hardmode": c.get("hardmode"),
-                "damage_type": c.get("damage_type"),
+                "pre-hardmode": c.get("pre-hardmode"),
             }
             filtered = {
                 key: value
@@ -72,12 +72,14 @@ class ChromaIndexer:
         """
         Query ChromaDB for the most similar chunks to the given embedding.
         """
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where or {},
-            include=["documents", "metadatas", "distances"]
-        )
+        query_args = {
+            "query_embeddings": [query_embedding],
+            "n_results": n_results,
+            "include": ["documents", "metadatas", "distances"]
+        }
+        if where is not None and where != {}:
+            query_args["where"] = where
+        results = self.collection.query(**query_args)
         hits = []
         for doc, meta, dist in zip(
             results["documents"][0],

@@ -50,9 +50,9 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "pageid": article.get("pageid"),
                     "category": article.get("category", ""),
                     "last_updated": article.get("last_updated", ""),
-                    "biome": article.get("biome"),
+                    "bosses": article.get("bosses"),
                     "hardmode": article.get("hardmode"),
-                    "damage_type": article.get("damage_type"),
+                    "pre-hardmode": article.get("pre-hardmode"),
                 })
                 chunk_idx += 1
     else:
@@ -69,9 +69,9 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "pageid": article.get("pageid"),
                 "category": article.get("category", ""),
                 "last_updated": article.get("last_updated", ""),
-                "biome": article.get("biome"),
+                "bosses": article.get("bosses"),
                 "hardmode": article.get("hardmode"),
-                "damage_type": article.get("damage_type"),
+                "pre-hardmode": article.get("pre-hardmode"),
             })
 
     logger.info(f"Article '{article.get('title')}' split into {len(chunk_dicts)} chunks")

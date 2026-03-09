@@ -37,6 +37,42 @@ REQUEST_PER_MINUTE: int = int(os.getenv("REQUEST_PER_MINUTE",5))
 SCRAPER_MAX_PAGEIDS_PER_REQUEST: int = int(os.getenv("SCRAPER_MAX_PAGEIDS_PER_REQUEST", 50))
 SCRAPER_HTML_CONCURRENCY: int = int(os.getenv("SCRAPER_HTML_CONCURRENCY", 2))
 SCRAPER_BATCH_DELAY_SECONDS: float = float(os.getenv("SCRAPER_BATCH_DELAY_SECONDS", 0.75))
+SCRAPER_MIN_SECTION_CHARS: int = int(os.getenv("SCRAPER_MIN_SECTION_CHARS", 80))
+
+# Scraper curation defaults
+SCRAPER_EXCLUDED_SECTION_TITLES: List[str] = [
+    "references",
+    "notes",
+    "external links",
+    "see also",
+    "history",
+    "trivia",
+    "gallery",
+]
+
+SCRAPER_DROP_SELECTORS: List[str] = [
+    ".mw-editsection",
+    ".navbox",
+    ".metadata",
+    "sup.reference",
+    ".mw-references-wrap",
+    "ol.references",
+    ".reflist",
+    ".catlinks",
+    ".printfooter",
+    ".hatnote",
+    ".mw-cite-backlink",
+    ".reference-text",
+]
+
+SCRAPER_BOILERPLATE_PATTERNS: List[str] = [
+    r"desktop\s+version\s*console\s+version\s*mobile\s+version",
+    r"desktop\s*/\s*console\s*/\s*mobile\s*-?\s*only\s+content\s*:?\s*this\s+information\s+applies\s+only\s+to\s+the\s+desktop\s*,\s*console\s*,\s*and\s+mobile\s+versions\s+of\s+terraria\s*\.?",
+    r"this\s+is\s+the\s+main\s+page\s+whose\s+information\s+applies\s+to\s+the\s+desktop\s*,\s*console\s*,\s*and\s+mobile\s+versions\s+of\s+terraria\s*\.?",
+    r"for\s+the\s+differences\s+of\s+this\s+information\s+on\s+old\s*-?\s*gen\s+console\s+and\s+3ds\s*,\s*see\s+legacy:[^.]+\.?",
+    r"for\s+the\s+differences\s+on\s+old\s*-?\s*gen\s+console\s+and\s+3ds\s*,\s*see\s+legacy:[^.]+\.?",
+    r"for\s+the\s+differences\s+of\s+this\s+information\s+on[^.]*legacy:[^.]+\.?",
+]
 
 # Retrieval config, this indicates how many chunks will be retrieved 
 RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", 3))

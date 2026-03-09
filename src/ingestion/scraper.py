@@ -20,6 +20,10 @@ from config import (
     SCRAPER_MAX_PAGEIDS_PER_REQUEST,
     SCRAPER_HTML_CONCURRENCY,
     SCRAPER_BATCH_DELAY_SECONDS,
+    SCRAPER_DROP_SELECTORS,
+    SCRAPER_EXCLUDED_SECTION_TITLES,
+    SCRAPER_BOILERPLATE_PATTERNS,
+    SCRAPER_MIN_SECTION_CHARS,
 )
 from bs4 import BeautifulSoup
 
@@ -40,18 +44,72 @@ def clean_section_html(section_html: str) -> str:
     # Remove scripts and styles
     for tag in soup(["script", "style", "noscript"]):
         tag.decompose()
-    # Remove edit links, references, and navigation
-    for tag in soup.select(".mw-editsection, .navbox, .metadata, sup.reference"):
-        tag.decompose()
+    # Remove wiki chrome, references, and nav/footer UI blocks.
+    for selector in SCRAPER_DROP_SELECTORS:
+        for tag in soup.select(selector):
+            tag.decompose()
+
     # Get plain text
     text = soup.get_text(" ", strip=True)
+    text = re.sub(r"\[\d+\]", " ", text)
+    for pattern in SCRAPER_BOILERPLATE_PATTERNS:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
+def _normalize_title(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+
+
+_EXCLUDED_TITLES_NORMALIZED = {
+    _normalize_title(title)
+    for title in SCRAPER_EXCLUDED_SECTION_TITLES
+}
+
+
+def _is_excluded_section_title(title: str) -> bool:
+    normalized = _normalize_title(title)
+    if not normalized:
+        return False
+    for excluded in _EXCLUDED_TITLES_NORMALIZED:
+        if normalized == excluded or normalized.startswith(f"{excluded} "):
+            return True
+    return False
+
+
+def _normalized_body_key(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+
+def _build_cleaned_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    cleaned_sections: List[Dict[str, str]] = []
+    seen_bodies = set()
+
+    for section in sections:
+        title = section.get("title") or "Untitled"
+        if _is_excluded_section_title(title):
+            continue
+
+        cleaned_text = clean_section_html(section.get("html", ""))
+        if len(cleaned_text) < SCRAPER_MIN_SECTION_CHARS:
+            continue
+
+        body_key = _normalized_body_key(cleaned_text)
+        if not body_key or body_key in seen_bodies:
+            continue
+        seen_bodies.add(body_key)
+
+        cleaned_sections.append({
+            "title": title,
+            "text": cleaned_text,
+        })
+
+    return cleaned_sections
+
+
 def _normalize_infobox_key(key: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", key.lower())).strip()
-
 
 def _parse_bool(value: str) -> Optional[bool]:
     normalized = value.strip().lower()
@@ -74,15 +132,16 @@ def _extract_domain_metadata(infobox: Dict[str, str]) -> Dict[str, Any]:
                 return normalized_map[candidate]
         return None
 
-    biome = find_value(["biome", "biomes"])
-    damage_type = find_value(["damage", "damage type", "class", "type"])
+    type_value = find_value(["type", "class", "damage type", "damage"])
     hardmode_raw = find_value(["hardmode", "hard mode"])
-    hardmode = _parse_bool(hardmode_raw) if hardmode_raw else None
+    hardmode = _parse_bool(hardmode_raw) if hardmode_raw else False
+    bosses = bool(type_value and "boss" in type_value.lower())
+    pre_hardmode = not hardmode
 
     return {
-        "biome": biome,
-        "damage_type": damage_type,
+        "bosses": bosses,
         "hardmode": hardmode,
+        "pre-hardmode": pre_hardmode,
     }
 
 
@@ -319,14 +378,7 @@ async def scrape_category(category: str, visited=None) -> List[Dict[str, Any]]:
                 continue
             page_html = html_by_pageid.get(pageid)
             parsed = extract_infobox_and_sections(page_html) if page_html else {"infobox": {}, "sections": []}
-            cleaned_sections = []
-            for section in parsed["sections"]:
-                cleaned_text = clean_section_html(section["html"])
-                if cleaned_text:
-                    cleaned_sections.append({
-                        "title": section["title"] or "Untitled",
-                        "text": cleaned_text,
-                    })
+            cleaned_sections = _build_cleaned_sections(parsed["sections"])
 
             derived_metadata = _extract_domain_metadata(parsed["infobox"])
             article = {
@@ -340,9 +392,9 @@ async def scrape_category(category: str, visited=None) -> List[Dict[str, Any]]:
                 "infobox": parsed["infobox"],
                 "sections": cleaned_sections,
                 "cleaned_text": "\n\n".join(section["text"] for section in cleaned_sections),
-                "biome": derived_metadata["biome"],
+                "bosses": derived_metadata["bosses"],
                 "hardmode": derived_metadata["hardmode"],
-                "damage_type": derived_metadata["damage_type"],
+                "pre-hardmode": derived_metadata["pre-hardmode"],
             }
             articles.append(article)
         if SCRAPER_BATCH_DELAY_SECONDS > 0:
@@ -437,14 +489,7 @@ async def scrape_specific_pages(
                 continue
             page_html = html_by_pageid.get(pageid)
             parsed = extract_infobox_and_sections(page_html) if page_html else {"infobox": {}, "sections": []}
-            cleaned_sections = []
-            for section in parsed["sections"]:
-                cleaned_text = clean_section_html(section["html"])
-                if cleaned_text:
-                    cleaned_sections.append({
-                        "title": section["title"] or "Untitled",
-                        "text": cleaned_text,
-                    })
+            cleaned_sections = _build_cleaned_sections(parsed["sections"])
 
             derived_metadata = _extract_domain_metadata(parsed["infobox"])
             article = {
@@ -458,9 +503,9 @@ async def scrape_specific_pages(
                 "infobox": parsed["infobox"],
                 "sections": cleaned_sections,
                 "cleaned_text": "\n\n".join(section["text"] for section in cleaned_sections),
-                "biome": derived_metadata["biome"],
+                "bosses": derived_metadata["bosses"],
                 "hardmode": derived_metadata["hardmode"],
-                "damage_type": derived_metadata["damage_type"],
+                "pre-hardmode": derived_metadata["pre-hardmode"],
             }
             articles.append(article)
         

@@ -9,3 +9,4 @@ cleaned_articles.db
 chromadb/
 chromadb_v1/
 
+test_chromadb/
