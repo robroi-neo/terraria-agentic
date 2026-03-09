@@ -19,6 +19,7 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
 
 # EMBEDDER MODEL
 EMBEDDER_MODEL: str = os.getenv("EMBEDDER_MODEL", "")
+EMBEDDER_DEVICE: str = os.getenv("EMBEDDER_DEVICE", "auto").strip().lower()
 
 # Only load API keys if not in development
 if not IS_DEVELOPMENT:
@@ -29,7 +30,7 @@ else:
     HUGGINFACE_API_KEY: str = None
 
 # ChromaDB
-CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
+CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb_2")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
 
 # RATE LIMIT

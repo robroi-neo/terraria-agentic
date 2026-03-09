@@ -10,7 +10,7 @@ from typing import List, Dict, Any
 import torch
 from transformers import AutoTokenizer, AutoModel
 from loguru import logger
-from config import EMBEDDER_MODEL, IS_DEVELOPMENT, HUGGINFACE_API_KEY
+from config import EMBEDDER_MODEL, EMBEDDER_DEVICE, IS_DEVELOPMENT, HUGGINFACE_API_KEY
 import requests
 
 BGE_PASSAGE_PREFIX = ""
@@ -36,7 +36,7 @@ class BGEEmbedder:
 
         self.is_development = IS_DEVELOPMENT
         if self.is_development:
-            self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+            self.device = self._resolve_device(device)
             logger.info(f"[DEV] Loading BGE model '{model_name}' on device '{self.device}' ...")
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
             self.model = AutoModel.from_pretrained(model_name).to(self.device)
@@ -48,6 +48,33 @@ class BGEEmbedder:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _resolve_device(self, device: str | None) -> str:
+        requested = (device or EMBEDDER_DEVICE or "auto").strip().lower()
+
+        if requested == "auto":
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                logger.info(f"[DEV] CUDA available (torch CUDA {torch.version.cuda}); using GPU: {gpu_name}")
+                return "cuda"
+            logger.warning("[DEV] CUDA is not available in current PyTorch runtime; using CPU.")
+            return "cpu"
+
+        if requested == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "EMBEDDER_DEVICE='cuda' was requested, but CUDA is unavailable. "
+                    "Install a CUDA-enabled PyTorch build and compatible NVIDIA drivers."
+                )
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info(f"[DEV] Forcing CUDA embedding on GPU: {gpu_name}")
+            return "cuda"
+
+        if requested in {"cpu", "mps"}:
+            # mps is accepted for compatibility if this project is run on Apple Silicon.
+            return requested
+
+        raise ValueError("Invalid embedder device. Use one of: auto, cuda, cpu, mps")
 
 
     def _mean_pool_cls(self, model_output: Any, attention_mask: torch.Tensor) -> torch.Tensor:
