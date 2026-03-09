@@ -2,12 +2,18 @@
 This is just a TypedDict that acts as the single source of truth passed between every node in the graph.
 Every node reads from it and writes back to it. 
 '''
-from typing import List, Dict, Any, Literal, Optional
+from typing import List, Dict, Literal
 from typing_extensions import TypedDict 
 
 class Message(TypedDict):
     role: Literal["user", "assistant"]
     content: str
+
+
+class GameplayAssumptions(TypedDict):
+    difficulty: str
+    character: str
+    player_class: str
 
 class AgentState(TypedDict):
     # Set at start
@@ -29,3 +35,6 @@ class AgentState(TypedDict):
     
     # records convo history 
     conversation_history: List[Message] 
+
+    # persisted gameplay context across turns
+    gameplay_assumptions: GameplayAssumptions

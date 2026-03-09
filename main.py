@@ -4,13 +4,15 @@ import asyncio
 from typing import List
 from src.agent.graph import terraria_graph
 from src.agent.state import AgentState
+from src.agent.gameplay_assumptions import DEFAULT_GAMEPLAY_ASSUMPTIONS
 
 
 def print_separator():
     print("\n" + "─" * 50 + "\n")
 
 
-def build_initial_state(query: str, history: List) -> AgentState:
+def build_initial_state(query: str, history: List, gameplay_assumptions: dict | None = None) -> AgentState:
+    assumptions = dict(gameplay_assumptions or DEFAULT_GAMEPLAY_ASSUMPTIONS)
     return {
         "query": query,
         "rewritten_query": "",
@@ -22,6 +24,7 @@ def build_initial_state(query: str, history: List) -> AgentState:
         "clarification_needed": False,
         "clarification_question": None,
         "conversation_history": list(history),
+        "gameplay_assumptions": assumptions,
     }
 
 
@@ -32,6 +35,7 @@ async def chat():
     print("─" * 50)
 
     conversation_history = []
+    gameplay_assumptions = dict(DEFAULT_GAMEPLAY_ASSUMPTIONS)
 
     while True:
         # Get user input
@@ -49,7 +53,7 @@ async def chat():
             break
 
         # Build state and run graph
-        state = build_initial_state(user_input, conversation_history)
+        state = build_initial_state(user_input, conversation_history, gameplay_assumptions)
 
         try:
             print("\nAssistant: ", end="", flush=True)
@@ -62,6 +66,7 @@ async def chat():
 
         # Keep session memory from graph output
         conversation_history = result.get("conversation_history", conversation_history)
+        gameplay_assumptions = result.get("gameplay_assumptions", gameplay_assumptions)
 
         # Handle clarification
         if result.get("clarification_needed"):

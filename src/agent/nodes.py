@@ -27,6 +27,12 @@ from src.agent.prompts import (
     GRADER_SYSTEM_PROMPT,
     GENERATOR_SYSTEM_PROMPT,
 )
+from src.agent.gameplay_assumptions import (
+    DEFAULT_GAMEPLAY_ASSUMPTIONS,
+    assumptions_block,
+    extract_from_text,
+    merge_with_defaults,
+)
 from src.ingestion.embedder import BGEEmbedder
 from src.ingestion.indexer import ChromaIndexer
 from config import RETRIEVAL_TOP_K
@@ -77,6 +83,33 @@ def _parse_json(response: str, node_name: str) -> dict:
         logger.error(f"[{node_name}] Failed to parse JSON. Raw response was:\n{response}")
         raise
 
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.lower().strip().split())
+
+
+def _current_assumptions(state: AgentState) -> dict[str, str]:
+    return merge_with_defaults(state.get("gameplay_assumptions", DEFAULT_GAMEPLAY_ASSUMPTIONS))
+
+
+def _get_pending_clarification(history: list[dict[str, str]]) -> tuple[str | None, str | None]:
+    """
+    Infer whether the last assistant turn was a clarification question.
+    If so, return (original_user_query, clarification_question).
+    """
+    if len(history) < 2:
+        return None, None
+
+    last_msg = history[-1]
+    prev_msg = history[-2]
+    if (
+        last_msg.get("role") == "assistant"
+        and prev_msg.get("role") == "user"
+        and "?" in last_msg.get("content", "")
+    ):
+        return prev_msg.get("content"), last_msg.get("content")
+    return None, None
+
 async def route_query(state: AgentState) -> AgentState:
     """
     Claude reads the query and decides:
@@ -86,10 +119,12 @@ async def route_query(state: AgentState) -> AgentState:
     logger.info(f"[route_query] Routing query: '{state['query']}'")
 
     history = state.get("conversation_history", [])
+    assumptions = extract_from_text(state["query"], _current_assumptions(state))
+    assumptions_context = assumptions_block(assumptions)
     user_message = (
-        f"Conversation so far:\n{json.dumps(history)}\n\nLatest query: {state['query']}"
+        f"{assumptions_context}\n\nConversation so far:\n{json.dumps(history)}\n\nLatest query: {state['query']}"
         if history
-        else state["query"]
+        else f"{assumptions_context}\n\nLatest query: {state['query']}"
     )
 
     await rate_limiter.wait_for_slot()
@@ -104,7 +139,7 @@ async def route_query(state: AgentState) -> AgentState:
 
     logger.info(f"[route_query] Route decision: '{route}'")
 
-    return {**state, "route": route}
+    return {**state, "route": route, "gameplay_assumptions": assumptions}
 
 
 # ---------------------------------------------------------------------------
@@ -123,13 +158,37 @@ async def clarify_query(state: AgentState) -> AgentState:
     """
     logger.info(f"[clarify_query] Evaluating query sufficiency: '{state['query']}'")
 
-    # Build user message — include conversation history if this is a retry
     history = state.get("conversation_history", [])
-    user_message = (
-        f"Conversation so far:\n{json.dumps(history)}\n\nLatest query: {state['query']}"
-        if history
+    current_query = state["query"].strip()
+    assumptions = extract_from_text(current_query, _current_assumptions(state))
+    assumptions_context = assumptions_block(assumptions)
+    base_query, prior_clarification_question = _get_pending_clarification(history)
+
+    # If this turn looks like a clarification answer, carry forward original intent.
+    effective_query = (
+        f"{base_query}. Additional user context: {current_query}"
+        if base_query and current_query
         else state["query"]
     )
+
+    if base_query and prior_clarification_question:
+        user_message = (
+            f"{assumptions_context}\n\n"
+            "Original user question:\n"
+            f"{base_query}\n\n"
+            "Previous clarification question from assistant:\n"
+            f"{prior_clarification_question}\n\n"
+            "User's clarification answer:\n"
+            f"{current_query}\n\n"
+            "Evaluate whether this now has enough detail to proceed. "
+            "If more detail is needed, ask a DIFFERENT follow-up question."
+        )
+    else:
+        user_message = (
+            f"{assumptions_context}\n\nConversation so far:\n{json.dumps(history)}\n\nLatest query: {state['query']}"
+            if history
+            else f"{assumptions_context}\n\nLatest query: {state['query']}"
+        )
 
     await rate_limiter.wait_for_slot()
     response = llm.complete(
@@ -142,6 +201,17 @@ async def clarify_query(state: AgentState) -> AgentState:
     clarification_needed = not parsed.get("sufficient", True)
     clarification_question = parsed.get("clarification_question")
 
+    # Guard against self-loop where the model repeats the exact same follow-up.
+    if (
+        clarification_needed
+        and prior_clarification_question
+        and clarification_question
+        and _normalize_text(clarification_question) == _normalize_text(prior_clarification_question)
+    ):
+        logger.warning("[clarify_query] Prevented repeated clarification question loop")
+        clarification_needed = False
+        clarification_question = None
+
     logger.info(f"[clarify_query] Sufficient: {not clarification_needed}")
     
     # Build updated conversation history
@@ -150,14 +220,16 @@ async def clarify_query(state: AgentState) -> AgentState:
     if clarification_needed:
         logger.info(f"[clarify_query] Asking user: '{clarification_question}'")
         # Store the original query and clarification question in history
-        updated_history.append({"role": "user", "content": state["query"]})
+        updated_history.append({"role": "user", "content": current_query})
         updated_history.append({"role": "assistant", "content": clarification_question})
 
     return {
         **state,
+        "query": effective_query,
         "clarification_needed": clarification_needed,
         "clarification_question": clarification_question,
         "conversation_history": updated_history,
+        "gameplay_assumptions": assumptions,
     }
 
 
@@ -178,14 +250,16 @@ async def rewrite_query(state: AgentState) -> AgentState:
 
     # Include conversation history for full context (e.g., after clarification)
     history = state.get("conversation_history", [])
+    assumptions = _current_assumptions(state)
+    assumptions_context = assumptions_block(assumptions)
     if history:
         # Combine history + latest query so rewriter has full context
         user_message = (
-            f"Conversation so far:\n{json.dumps(history)}\n\n"
+            f"{assumptions_context}\n\nConversation so far:\n{json.dumps(history)}\n\n"
             f"Latest query: {state['query']}"
         )
     else:
-        user_message = state["query"]
+        user_message = f"{assumptions_context}\n\nLatest query: {state['query']}"
 
     await rate_limiter.wait_for_slot()
     response = llm.complete(
@@ -295,6 +369,7 @@ async def generate_answer(state: AgentState) -> AgentState:
 
     chunks = state.get("graded_chunks") or []
     history = state.get("conversation_history", [])
+    assumptions_context = assumptions_block(_current_assumptions(state))
 
     # Format context block for the prompt
     if chunks:
@@ -303,14 +378,14 @@ async def generate_answer(state: AgentState) -> AgentState:
         )
         history_block = f"Conversation so far:\n{json.dumps(history)}\n\n" if history else ""
         user_message = (
-            f"{history_block}Context from the Terraria wiki:\n\n{context}"
+            f"{assumptions_context}\n\n{history_block}Context from the Terraria wiki:\n\n{context}"
             f"\n\nQuestion: {state['query']}"
         )
     else:
         # Direct route or no relevant chunks found
         history_block = f"Conversation so far:\n{json.dumps(history)}\n\n" if history else ""
         user_message = (
-            f"{history_block}Question: {state['query']}\n\n"
+            f"{assumptions_context}\n\n{history_block}Question: {state['query']}\n\n"
             "(No wiki context available — answer from general knowledge if possible.)"
         )
 

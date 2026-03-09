@@ -3,7 +3,7 @@ import concurrent.futures
 import streamlit as st
 from src.agent.graph import terraria_graph
 
-from main import build_initial_state
+from main import build_initial_state, DEFAULT_GAMEPLAY_ASSUMPTIONS
 
 
 def run_graph_sync(state):
@@ -15,6 +15,9 @@ st.set_page_config(page_title="Terraria Wiki Assistant")
 
 if "history" not in st.session_state:
     st.session_state.history = []
+
+if "gameplay_assumptions" not in st.session_state:
+    st.session_state.gameplay_assumptions = dict(DEFAULT_GAMEPLAY_ASSUMPTIONS)
 
 # --- Chat history ---
 st.title("Terraria Boss Progression Assistant")
@@ -30,7 +33,11 @@ if query:
     with st.chat_message("user"):
         st.markdown(query)
 
-    state = build_initial_state(query, st.session_state.history)
+    state = build_initial_state(
+        query,
+        st.session_state.history,
+        st.session_state.gameplay_assumptions,
+    )
 
     with st.spinner("Thinking..."):
         try:
@@ -41,6 +48,10 @@ if query:
             result = {}
 
     st.session_state.history = result.get("conversation_history", st.session_state.history)
+    st.session_state.gameplay_assumptions = result.get(
+        "gameplay_assumptions",
+        st.session_state.gameplay_assumptions,
+    )
 
     if result.get("clarification_needed"):
         with st.chat_message("assistant"):
