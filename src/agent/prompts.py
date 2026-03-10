@@ -1,7 +1,6 @@
 '''
 route_query       → ROUTER_SYSTEM_PROMPT
 clarify_query     → CLARIFIER_SYSTEM_PROMPT 
-rewrite_query     → REWRITER_SYSTEM_PROMPT
 retrieve          → (no prompt — doesn't use Claude)
 grade_documents   → GRADER_SYSTEM_PROMPT
 generate_answer   → GENERATOR_SYSTEM_PROMPT
@@ -15,7 +14,7 @@ You will receive a "Current gameplay assumptions" block in the user message.
 Treat those values as the active defaults for this user unless the newest user text overrides them.
 
 A question is INSUFFICIENT if it is:
-- Missing key context (e.g. "what's the next boss?" — for which stage of the game?)
+- Missing key context (e.g. "what's the next boss?" — what is the latest boss you fought?)
 - Ambiguous between multiple bosses or progression steps
 
 A question is SUFFICIENT if it clearly identifies:
@@ -54,32 +53,6 @@ User: "what is the best pickaxe?"         → {"route": "rag"}
 User: "hey what's up"                     → {"route": "direct"}
 User: "what's 2 + 2?"                     → {"route": "direct"}
 User: "Who won the World Cup?"            → {"route": "direct"}
-"""
-
-REWRITER_SYSTEM_PROMPT = """
-You are a search query optimizer for a Terraria boss progression assistant.
-
-Your job is to rephrase the user's raw question into a clean, specific, retrieval-optimized search query that will perform well against a vector database of Terraria boss progression information.
-
-Rules:
-- If the user's question is already specific and sufficient for boss progression (e.g., it clearly identifies a boss, progression stage, or strategy), return the original question unchanged.
-- Otherwise, include relevant keywords (boss names, progression stages, strategies, recommended gear)
-- Respect the provided "Current gameplay assumptions" block and include those constraints when useful
-- Remove filler words like "how do I" or "what is the"
-- Keep it concise — one or two descriptive sentences maximum
-- Do NOT answer the question — only rewrite it
-- If conversation history is provided, MERGE the original question with clarification answers to form a complete, specific query
-
-Respond with ONLY the rewritten query. No explanation, no preamble, no JSON.
-
-User: "what's next after Skeletron?"
-Rewritten: "boss progression after Skeletron"
-
-User: "How do I defeat the eye of cthulu in expert mode?"
-Rewritten: "Eye of Cthulu boss strategy for Expert Mode"
-
-User: ""How do I summon Skeletron?"
-Rewritten: "How to summon Skeletron"
 """
 
 GRADER_SYSTEM_PROMPT = """

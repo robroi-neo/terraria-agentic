@@ -23,7 +23,6 @@ import time
 from src.agent.prompts import (
     ROUTER_SYSTEM_PROMPT,
     CLARIFIER_SYSTEM_PROMPT,
-    REWRITER_SYSTEM_PROMPT,
     GRADER_SYSTEM_PROMPT,
     GENERATOR_SYSTEM_PROMPT,
 )
@@ -240,36 +239,10 @@ async def clarify_query(state: AgentState) -> AgentState:
 
 async def rewrite_query(state: AgentState) -> AgentState:
     """
-    Claude rephrases the raw user query for better semantic search.
-
-    Example:
-        "how do i kill skeletron" 
-        → "Skeletron boss fight strategy, recommended weapons and armor"
+    Pass-through node: keep the graph shape stable without LLM rewriting.
     """
-    logger.info(f"[rewrite_query] Rewriting query: '{state['query']}'")
-
-    # Include conversation history for full context (e.g., after clarification)
-    history = state.get("conversation_history", [])
-    assumptions = _current_assumptions(state)
-    assumptions_context = assumptions_block(assumptions)
-    if history:
-        # Combine history + latest query so rewriter has full context
-        user_message = (
-            f"{assumptions_context}\n\nConversation so far:\n{json.dumps(history)}\n\n"
-            f"Latest query: {state['query']}"
-        )
-    else:
-        user_message = f"{assumptions_context}\n\nLatest query: {state['query']}"
-
-    await rate_limiter.wait_for_slot()
-    response = llm.complete(
-        system=REWRITER_SYSTEM_PROMPT,
-        user=user_message
-    )
-
-    # Expects plain text back — just the rewritten query string
-    rewritten = response.strip()
-    logger.info(f"[rewrite_query] Rewritten: '{rewritten}'")
+    rewritten = state["query"].strip()
+    logger.info(f"[rewrite_query] Rewriter disabled. Using query unchanged: '{rewritten}'")
 
     return {**state, "rewritten_query": rewritten}
 
