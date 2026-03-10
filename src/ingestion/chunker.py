@@ -5,7 +5,7 @@ Uses tiktoken for tokenization.
 from typing import List, Dict, Any
 from tiktoken import get_encoding
 from loguru import logger
-from config import CHUNK_SIZE, CHUNK_OVERLAP
+from config import CHUNK_SIZE, CHUNK_OVERLAP, GUIDE_CHUNK_SIZE, GUIDE_CHUNK_OVERLAP
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP, encoding_name: str = "cl100k_base") -> List[str]:
     """
@@ -31,6 +31,9 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     sections = article.get("sections") or []
     chunk_dicts = []
+    is_root_walkthrough = bool(article.get("is_root_walkthrough"))
+    chunk_size = GUIDE_CHUNK_SIZE if is_root_walkthrough else CHUNK_SIZE
+    overlap = GUIDE_CHUNK_OVERLAP if is_root_walkthrough else CHUNK_OVERLAP
 
     if sections:
         chunk_idx = 0
@@ -38,13 +41,14 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
             section_text = section.get("text", "")
             if not section_text:
                 continue
-            section_chunks = chunk_text(section_text)
+            section_chunks = chunk_text(section_text, chunk_size=chunk_size, overlap=overlap)
             for chunk in section_chunks:
                 chunk_dicts.append({
                     "text": chunk,
                     "chunk_index": chunk_idx,
                     "section_index": section_index,
                     "section_title": section.get("title", "Untitled"),
+                    "section_path": section.get("path", section.get("title", "Untitled")),
                     "source_url": article.get("source_url", ""),
                     "page_title": article.get("title", ""),
                     "pageid": article.get("pageid"),
@@ -53,13 +57,18 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "bosses": article.get("bosses"),
                     "hardmode": article.get("hardmode"),
                     "pre-hardmode": article.get("pre-hardmode"),
+                    "source_partition": article.get("source_partition", "core"),
+                    "is_root_walkthrough": article.get("is_root_walkthrough", False),
+                    "discovered_from": article.get("discovered_from", ""),
+                    "crawl_depth": article.get("crawl_depth", 0),
+                    "root_page_title": article.get("root_page_title", ""),
                 })
                 chunk_idx += 1
     else:
         text = article.get("cleaned_text", "")
         if not text:
             return []
-        chunks = chunk_text(text)
+        chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
         for idx, chunk in enumerate(chunks):
             chunk_dicts.append({
                 "text": chunk,
@@ -72,6 +81,11 @@ def chunk_article(article: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "bosses": article.get("bosses"),
                 "hardmode": article.get("hardmode"),
                 "pre-hardmode": article.get("pre-hardmode"),
+                "source_partition": article.get("source_partition", "core"),
+                "is_root_walkthrough": article.get("is_root_walkthrough", False),
+                "discovered_from": article.get("discovered_from", ""),
+                "crawl_depth": article.get("crawl_depth", 0),
+                "root_page_title": article.get("root_page_title", ""),
             })
 
     logger.info(f"Article '{article.get('title')}' split into {len(chunk_dicts)} chunks")
@@ -91,7 +105,8 @@ def chunk_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             pageid = chunk.get("pageid")
             section_index = chunk.get("section_index", 0)
             chunk_index = chunk.get("chunk_index", 0)
-            chunk_id = f"{pageid}:{section_index}:{chunk_index}"
+            source_partition = chunk.get("source_partition", "core")
+            chunk_id = f"{source_partition}:{pageid}:{section_index}:{chunk_index}"
             if chunk_id in seen_ids:
                 duplicates.append(chunk_id)
                 continue

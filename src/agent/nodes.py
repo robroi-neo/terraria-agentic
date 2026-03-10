@@ -34,7 +34,15 @@ from src.agent.gameplay_assumptions import (
 )
 from src.ingestion.embedder import BGEEmbedder
 from src.ingestion.indexer import ChromaIndexer
-from config import RETRIEVAL_TOP_K
+from config import (
+    RETRIEVAL_TOP_K,
+    RETRIEVAL_ENABLE_WALKTHROUGH_SPLIT,
+    RETRIEVAL_WALKTHROUGH_ROOT_COLLECTION,
+    RETRIEVAL_WALKTHROUGH_LINKS_COLLECTION,
+    RETRIEVAL_WALKTHROUGH_ROOT_TOP_K,
+    RETRIEVAL_WALKTHROUGH_LINKS_TOP_K,
+    RETRIEVAL_WALKTHROUGH_ROOT_DISTANCE_BONUS,
+)
 
 
 
@@ -68,6 +76,51 @@ rate_limiter = RequestRateLimiter()
 llm = LLMProvider()
 embedder = BGEEmbedder()
 indexer = ChromaIndexer()
+walkthrough_root_indexer = None
+walkthrough_links_indexer = None
+
+if RETRIEVAL_ENABLE_WALKTHROUGH_SPLIT:
+    walkthrough_root_indexer = ChromaIndexer(collection_name=RETRIEVAL_WALKTHROUGH_ROOT_COLLECTION)
+    walkthrough_links_indexer = ChromaIndexer(collection_name=RETRIEVAL_WALKTHROUGH_LINKS_COLLECTION)
+
+
+def _chunk_dedupe_key(chunk: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        chunk.get("source_partition", "core"),
+        chunk.get("page_title"),
+        chunk.get("section_index"),
+        chunk.get("chunk_index"),
+    )
+
+
+def _merge_ranked_chunks(root_chunks: list[dict[str, Any]], link_chunks: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for chunk in root_chunks:
+        adjusted = dict(chunk)
+        adjusted["source_partition"] = adjusted.get("source_partition", "walkthrough_root")
+        adjusted["adjusted_distance"] = float(adjusted.get("distance", 0.0)) - RETRIEVAL_WALKTHROUGH_ROOT_DISTANCE_BONUS
+        ranked.append(adjusted)
+
+    for chunk in link_chunks:
+        adjusted = dict(chunk)
+        adjusted["source_partition"] = adjusted.get("source_partition", "walkthrough_links")
+        adjusted["adjusted_distance"] = float(adjusted.get("distance", 0.0))
+        ranked.append(adjusted)
+
+    ranked.sort(key=lambda c: c.get("adjusted_distance", c.get("distance", 0.0)))
+
+    merged: list[dict[str, Any]] = []
+    seen = set()
+    for chunk in ranked:
+        key = _chunk_dedupe_key(chunk)
+        if key in seen:
+            continue
+        seen.add(key)
+        chunk.pop("adjusted_distance", None)
+        merged.append(chunk)
+        if len(merged) >= limit:
+            break
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -265,8 +318,23 @@ async def retrieve(state: AgentState) -> AgentState:
     # Embed the query using your existing BGEEmbedder
     query_vector = embedder.embed_query(query_text)
 
-    # Fetch top-K chunks from ChromaDB (configurable)
-    chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
+    # Fetch top-K chunks from ChromaDB.
+    if RETRIEVAL_ENABLE_WALKTHROUGH_SPLIT and walkthrough_root_indexer and walkthrough_links_indexer:
+        root_chunks = await walkthrough_root_indexer.query(
+            query_vector,
+            n_results=RETRIEVAL_WALKTHROUGH_ROOT_TOP_K,
+        )
+        link_chunks = await walkthrough_links_indexer.query(
+            query_vector,
+            n_results=RETRIEVAL_WALKTHROUGH_LINKS_TOP_K,
+        )
+        chunks = _merge_ranked_chunks(root_chunks, link_chunks, RETRIEVAL_TOP_K)
+        logger.info(
+            "[retrieve] Split retrieval enabled. "
+            f"root_hits={len(root_chunks)} link_hits={len(link_chunks)} merged={len(chunks)}"
+        )
+    else:
+        chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
 
     logger.info(f"[retrieve] Retrieved {len(chunks)} chunks")
     for i, chunk in enumerate(chunks):

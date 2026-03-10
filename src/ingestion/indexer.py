@@ -29,7 +29,7 @@ class ChromaIndexer:
         Add embedded chunks to ChromaDB collection.
         """
         ids = [
-            f"{c.get('pageid', c['page_title'])}:{c.get('section_index', 0)}:{c['chunk_index']}"
+            f"{c.get('source_partition', 'core')}:{c.get('pageid', c['page_title'])}:{c.get('section_index', 0)}:{c['chunk_index']}"
             for c in chunks
         ]
         embeddings = [c["embedding"] for c in chunks]
@@ -43,9 +43,15 @@ class ChromaIndexer:
                 "last_updated": c.get("last_updated", ""),
                 "section_index": c.get("section_index", 0),
                 "section_title": c.get("section_title", ""),
+                "section_path": c.get("section_path", ""),
                 "bosses": c.get("bosses"),
                 "hardmode": c.get("hardmode"),
                 "pre-hardmode": c.get("pre-hardmode"),
+                "source_partition": c.get("source_partition", "core"),
+                "is_root_walkthrough": c.get("is_root_walkthrough", False),
+                "discovered_from": c.get("discovered_from", ""),
+                "crawl_depth": c.get("crawl_depth", 0),
+                "root_page_title": c.get("root_page_title", ""),
             }
             filtered = {
                 key: value

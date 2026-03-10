@@ -6,6 +6,8 @@ Fetches page lists and article content using the official JSON API.
 import asyncio
 import re
 import random
+from collections import deque
+from urllib.parse import unquote, urlparse
 
 import httpx
 from typing import List, Dict, Any, Optional
@@ -24,6 +26,8 @@ from config import (
     SCRAPER_EXCLUDED_SECTION_TITLES,
     SCRAPER_BOILERPLATE_PATTERNS,
     SCRAPER_MIN_SECTION_CHARS,
+    GUIDE_MIN_SECTION_CHARS,
+    WALKTHROUGH_EXCLUDED_NAMESPACES,
 )
 from bs4 import BeautifulSoup
 
@@ -82,8 +86,11 @@ def _normalized_body_key(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
 
 
-def _build_cleaned_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    cleaned_sections: List[Dict[str, str]] = []
+def _build_cleaned_sections(
+    sections: List[Dict[str, Any]],
+    min_chars: int = SCRAPER_MIN_SECTION_CHARS,
+) -> List[Dict[str, Any]]:
+    cleaned_sections: List[Dict[str, Any]] = []
     seen_bodies = set()
 
     for section in sections:
@@ -91,8 +98,9 @@ def _build_cleaned_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, st
         if _is_excluded_section_title(title):
             continue
 
-        cleaned_text = clean_section_html(section.get("html", ""))
-        if len(cleaned_text) < SCRAPER_MIN_SECTION_CHARS:
+        raw_html = section.get("html", "")
+        cleaned_text = clean_section_html(raw_html)
+        if len(cleaned_text) < min_chars:
             continue
 
         body_key = _normalized_body_key(cleaned_text)
@@ -102,10 +110,53 @@ def _build_cleaned_sections(sections: List[Dict[str, Any]]) -> List[Dict[str, st
 
         cleaned_sections.append({
             "title": title,
+            "path": section.get("path") or title,
             "text": cleaned_text,
+            "links": _extract_clickable_titles(raw_html),
         })
 
     return cleaned_sections
+
+
+def _clean_heading_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.replace("[edit]", "")).strip()
+
+
+def _extract_clickable_titles(section_html: str) -> List[str]:
+    """
+    Extract in-domain wiki page titles from section HTML links.
+    """
+    soup = BeautifulSoup(section_html or "", "html.parser")
+    titles: List[str] = []
+    seen = set()
+
+    for anchor in soup.select("a[href]"):
+        href = anchor.get("href", "").strip()
+        if not href:
+            continue
+
+        title = None
+        if href.startswith("/wiki/"):
+            title = href[len("/wiki/"):]
+        elif href.startswith("https://terraria.wiki.gg/wiki/"):
+            parsed = urlparse(href)
+            if parsed.netloc == "terraria.wiki.gg" and parsed.path.startswith("/wiki/"):
+                title = parsed.path[len("/wiki/"):]
+
+        if not title:
+            continue
+
+        title = unquote(title).split("#", 1)[0].strip().replace("_", " ")
+        if not title:
+            continue
+
+        normalized = _normalize_title(title)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        titles.append(title)
+
+    return titles
 
 
 def _normalize_infobox_key(key: str) -> str:
@@ -164,19 +215,37 @@ def extract_infobox_and_sections(html: str) -> Dict[str, Any]:
                 val = value.get_text(" ", strip=True)
                 infobox[key] = val
         infobox_table.decompose()
-    # Extract sections: each <h2> and its following siblings until next <h2>
+    # Extract sections with hierarchy: h2 (major phase) and h3 (sub phase).
     sections = []
-    current_title = "Introduction"
+    current_h2 = "Introduction"
+    current_h3 = None
     current_content: List[str] = []
+
+    def _flush_current_section() -> None:
+        if not current_content:
+            return
+        current_title = current_h3 or current_h2
+        current_path = current_h2 if not current_h3 else f"{current_h2} > {current_h3}"
+        sections.append({
+            "title": current_title,
+            "path": current_path,
+            "html": "".join(current_content),
+        })
 
     for child in content_root.children:
         node_name = getattr(child, "name", None)
         if node_name == "h2":
-            if current_content:
-                sections.append({"title": current_title, "html": "".join(current_content)})
-                current_content = []
+            _flush_current_section()
+            current_content = []
             headline = child.select_one(".mw-headline")
-            current_title = (headline.get_text(" ", strip=True) if headline else child.get_text(" ", strip=True)).replace("[edit]", "").strip()
+            current_h2 = _clean_heading_text(headline.get_text(" ", strip=True) if headline else child.get_text(" ", strip=True))
+            current_h3 = None
+            continue
+        if node_name == "h3":
+            _flush_current_section()
+            current_content = []
+            headline = child.select_one(".mw-headline")
+            current_h3 = _clean_heading_text(headline.get_text(" ", strip=True) if headline else child.get_text(" ", strip=True))
             continue
         if node_name in {"script", "style"}:
             continue
@@ -184,10 +253,33 @@ def extract_infobox_and_sections(html: str) -> Dict[str, Any]:
             continue
         current_content.append(str(child))
 
-    if current_content:
-        sections.append({"title": current_title, "html": "".join(current_content)})
+    _flush_current_section()
 
     return {"infobox": infobox, "sections": sections}
+
+
+def _normalize_page_title(title: str) -> str:
+    return re.sub(r"\s+", " ", title.strip().replace("_", " ")).lower()
+
+
+def _is_crawlable_title(
+    title: str,
+    include_guide_links: bool,
+    excluded_namespaces: List[str],
+) -> bool:
+    clean_title = title.strip()
+    if not clean_title:
+        return False
+    if clean_title.startswith("#"):
+        return False
+
+    if ":" in clean_title:
+        namespace = clean_title.split(":", 1)[0].strip().lower()
+        if namespace in {ns.lower() for ns in excluded_namespaces}:
+            return False
+        if namespace == "guide" and not include_guide_links:
+            return False
+    return True
 
 async def _get_json_with_backoff(
     client: httpx.AsyncClient,
@@ -514,3 +606,106 @@ async def scrape_specific_pages(
     
     logger.info(f"Scraped {len(articles)} specific pages")
     return articles
+
+
+async def scrape_walkthrough_recursive(
+    root_title: str,
+    max_depth: int,
+    max_pages: int,
+    include_guide_links: bool,
+    excluded_namespaces: Optional[List[str]] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Crawl from a root guide page and recursively scrape linked pages up to max_depth.
+
+    Returns
+    -------
+    {
+        "root_articles": [...],
+        "linked_articles": [...],
+    }
+    """
+    excluded_namespaces = excluded_namespaces or WALKTHROUGH_EXCLUDED_NAMESPACES
+    root_articles: List[Dict[str, Any]] = []
+    linked_articles: List[Dict[str, Any]] = []
+
+    queue: deque[tuple[str, int, Optional[str]]] = deque()
+    queue.append((root_title, 0, None))
+
+    processed = set()
+    scheduled = {_normalize_page_title(root_title)}
+
+    while queue and len(processed) < max_pages:
+        current_title, depth, discovered_from = queue.popleft()
+        normalized_current = _normalize_page_title(current_title)
+        if normalized_current in processed:
+            continue
+        if depth > max_depth:
+            continue
+
+        title_map = await fetch_pageids_by_titles([current_title])
+        if not title_map:
+            logger.warning(f"[walkthrough_recursive] Could not resolve title: {current_title}")
+            processed.add(normalized_current)
+            continue
+
+        canonical_title, pageid = next(iter(title_map.items()))
+        canonical_norm = _normalize_page_title(canonical_title)
+        if canonical_norm in processed:
+            continue
+
+        articles = await scrape_specific_pages(pageids=[pageid])
+        if not articles:
+            processed.add(canonical_norm)
+            continue
+
+        article = articles[0]
+        is_root = depth == 0
+        if is_root:
+            article["sections"] = _build_cleaned_sections(
+                extract_infobox_and_sections(article.get("html", "")).get("sections", []),
+                min_chars=GUIDE_MIN_SECTION_CHARS,
+            )
+
+        article["is_root_walkthrough"] = is_root
+        article["source_partition"] = "walkthrough_root" if is_root else "walkthrough_links"
+        article["discovered_from"] = discovered_from or root_title
+        article["crawl_depth"] = depth
+        article["root_page_title"] = root_title
+
+        if is_root:
+            root_articles.append(article)
+        else:
+            linked_articles.append(article)
+
+        processed.add(canonical_norm)
+
+        if depth >= max_depth:
+            continue
+
+        linked_titles = []
+        for section in article.get("sections", []):
+            linked_titles.extend(section.get("links", []))
+
+        for linked_title in linked_titles:
+            if not _is_crawlable_title(linked_title, include_guide_links, excluded_namespaces):
+                continue
+
+            linked_norm = _normalize_page_title(linked_title)
+            if linked_norm in processed or linked_norm in scheduled:
+                continue
+
+            if len(processed) + len(queue) >= max_pages:
+                break
+
+            queue.append((linked_title, depth + 1, canonical_title))
+            scheduled.add(linked_norm)
+
+    logger.info(
+        "[walkthrough_recursive] Finished crawl. "
+        f"Root articles={len(root_articles)}, linked articles={len(linked_articles)}, processed={len(processed)}"
+    )
+    return {
+        "root_articles": root_articles,
+        "linked_articles": linked_articles,
+    }

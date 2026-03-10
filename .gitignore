@@ -3,8 +3,11 @@
 __pycache__/
 .pytest_cache
 
+.devcontainer
 # Databases
+databases/
 test_cleaned_articles.db
 cleaned_articles.db
+
 
 test_chromadb/
