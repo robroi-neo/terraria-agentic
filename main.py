@@ -23,10 +23,10 @@ def build_initial_state(query: str, history: List, gameplay_assumptions: dict | 
         "route": "rag",
         "clarification_needed": False,
         "clarification_question": None,
+        "clarification_retry_count": 0,
         "conversation_history": list(history),
         "gameplay_assumptions": assumptions,
     }
-
 
 async def chat():
     print("─" * 50)

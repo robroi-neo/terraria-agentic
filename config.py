@@ -30,7 +30,7 @@ else:
     HUGGINFACE_API_KEY: str = None
 
 # ChromaDB
-CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb_2")
+CHROMADB_PATH: str = os.getenv("CHROMADB_PATH", "./chromadb")
 CHROMADB_COLLECTION: str = os.getenv("CHROMADB_COLLECTION", "terraria_wiki")
 
 # RATE LIMIT
@@ -105,29 +105,48 @@ REQUEST_FROM_EMAIL: str = os.getenv("REQUEST_FROM_EMAIL", "your-email@example.co
 MEDIAWIKI_CATEGORIES: List[str] = [
     # To have info about bosses
     "Boss_NPCs",
-    # To have info about summoned bosses
-    "Summoned_events",
-    # To have info about tools
+    # Items
     "Tool_items",
+    "Weapon_items",
+    "Potion_items",
+    "Healing_items",
+    "Bar_items",
+    "Ammunition_items",
+    "Armor_items",
+
+    # special case items
+    "Boots_items",
+    "Gem_items",
+    "Souls",
+    "Developer_items",
     # includes boss summons
-    "Summoning_items",
+    "Boss_summon_items",
+    "Event_summon_items",
+    "Mount_summon_items",
+    # Events
+    "Random_events",
+    "Seasonal_events",
+    "Summoned_events",
+    
+    # Mechanics
+    "Buffs",
+    "Debuffs",
+    "Liquids",
+    "Modifiers",
+    "Buffs",
 
     # Difficulty Mode
     "Expert_Mode_content",
     "Journey_Mode_content",
     "Master_Mode_content",
+
+    "Crossover_content",
 ]
 # List of specific page titles to scrape (optional, can be empty)
 SCRAPE_PAGES: List[str] = [
     "Terraria",
-    "Buffs",
-    "Debuffs",
-    "Bosses",
-    "Pre-Hardmode",
-    "Hardmode",
-    "Hardmode_conversion",
     "Difficulty",
-    "Game_mechanics"
+
 ]
 
 # Chunking
@@ -170,3 +189,4 @@ tenacity_kwargs = {
 # Safety checks
 if not EMBEDDER_MODEL:
     raise RuntimeError("EMBEDDER_MODEL is required in .env")
+    
