@@ -10,7 +10,6 @@ from src.agent.nodes import (
     generate_answer,
 )
 
-
 # ---------------------------------------------------------------------------
 # Conditional edge functions
 # ---------------------------------------------------------------------------
@@ -35,20 +34,6 @@ def decide_after_clarification(state: AgentState) -> str:
     if state["clarification_needed"]:
         return "ask_user"
     return "rewrite_query"
-
-
-def decide_after_grading(state: AgentState) -> str:
-    """
-    After grade_documents runs:
-    - no relevant chunks + retries remain → loop back to rewrite_query
-    - relevant chunks found OR max retries hit → proceed to generate_answer
-    """
-    no_good_chunks = len(state.get("graded_chunks", [])) == 0
-    retries_remaining = state.get("retry_count", 0) < 3
-
-    if no_good_chunks and retries_remaining:
-        return "rewrite_query"
-    return "generate_answer"
 
 
 # ---------------------------------------------------------------------------

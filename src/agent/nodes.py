@@ -7,10 +7,14 @@ Async Functions. Accepts Current State and Returns an Updated State.
 # clarify_query() -> evaluates whether the query is specific enough to retrieve //uses llm
 # rewrite_query() -> rewrite query into retrieval optimized form
 # retrieve() -> calls llm. Embdedds writing, fetches top k //uses llm
-# grade_documents() -> top k chunks is actually made here? so is this called betwwen retrieve?
 # generate_answer() -> final node
 
 # src/agent/nodes.py
+
+# The problem is
+# when querying in chroma db, it does not involve the previous question during follow ups.
+# add a new node to summarize prev question + follow up.
+
 
 import json
 from typing import Any
@@ -23,7 +27,6 @@ import time
 from src.agent.prompts import (
     ROUTER_SYSTEM_PROMPT,
     CLARIFIER_SYSTEM_PROMPT,
-    GRADER_SYSTEM_PROMPT,
     GENERATOR_SYSTEM_PROMPT,
 )
 from src.agent.gameplay_assumptions import (
@@ -43,8 +46,6 @@ from config import (
     RETRIEVAL_WALKTHROUGH_LINKS_TOP_K,
     RETRIEVAL_WALKTHROUGH_ROOT_DISTANCE_BONUS,
 )
-
-
 
 # ---------------------------------------------------------------------------
 # Rate Limiter for LLM requests
@@ -140,6 +141,25 @@ def _normalize_text(value: str) -> str:
     return " ".join(value.lower().strip().split())
 
 
+def _token_set(value: str) -> set[str]:
+    return set(_normalize_text(value).split())
+
+
+def _is_repeated_clarification_question(previous: str, current: str) -> bool:
+    prev_norm = _normalize_text(previous)
+    curr_norm = _normalize_text(current)
+    if prev_norm == curr_norm:
+        return True
+
+    prev_tokens = _token_set(previous)
+    curr_tokens = _token_set(current)
+    if not prev_tokens or not curr_tokens:
+        return False
+
+    overlap = len(prev_tokens & curr_tokens) / max(len(prev_tokens), len(curr_tokens))
+    return overlap >= 0.8
+
+
 def _current_assumptions(state: AgentState) -> dict[str, str]:
     return merge_with_defaults(state.get("gameplay_assumptions", DEFAULT_GAMEPLAY_ASSUMPTIONS))
 
@@ -215,6 +235,8 @@ async def clarify_query(state: AgentState) -> AgentState:
     assumptions = extract_from_text(current_query, _current_assumptions(state))
     assumptions_context = assumptions_block(assumptions)
     base_query, prior_clarification_question = _get_pending_clarification(history)
+    clarification_retry_count = state.get("clarification_retry_count", 0)
+    max_clarification_retries = 1
 
     # If this turn looks like a clarification answer, carry forward original intent.
     effective_query = (
@@ -222,6 +244,18 @@ async def clarify_query(state: AgentState) -> AgentState:
         if base_query and current_query
         else state["query"]
     )
+
+    if clarification_retry_count >= max_clarification_retries:
+        logger.info("[clarify_query] Max clarification retries reached - proceeding.")
+        return {
+            **state,
+            "query": effective_query,
+            "clarification_needed": False,
+            "clarification_question": None,
+            "clarification_retry_count": clarification_retry_count,
+            "conversation_history": list(history),
+            "gameplay_assumptions": assumptions,
+        }
 
     if base_query and prior_clarification_question:
         user_message = (
@@ -233,13 +267,17 @@ async def clarify_query(state: AgentState) -> AgentState:
             "User's clarification answer:\n"
             f"{current_query}\n\n"
             "Evaluate whether this now has enough detail to proceed. "
-            "If more detail is needed, ask a DIFFERENT follow-up question."
+            "If more detail is needed, ask ONE different follow-up question - but only if absolutely necessary. "
+            "When in doubt, mark it as sufficient and proceed."
         )
     else:
         user_message = (
-            f"{assumptions_context}\n\nConversation so far:\n{json.dumps(history)}\n\nLatest query: {state['query']}"
-            if history
-            else f"{assumptions_context}\n\nLatest query: {state['query']}"
+            f"{assumptions_context}\n\n"
+            "User question:\n"
+            f"{current_query}\n\n"
+            "Evaluate whether this has enough detail to proceed. "
+            "If more detail is needed, ask exactly one concise clarification question. "
+            "When in doubt, mark it as sufficient and proceed."
         )
 
     await rate_limiter.wait_for_slot()
@@ -253,12 +291,16 @@ async def clarify_query(state: AgentState) -> AgentState:
     clarification_needed = not parsed.get("sufficient", True)
     clarification_question = parsed.get("clarification_question")
 
+    if clarification_needed and not clarification_question:
+        logger.warning("[clarify_query] Missing clarification question in insufficient response; proceeding.")
+        clarification_needed = False
+
     # Guard against self-loop where the model repeats the exact same follow-up.
     if (
         clarification_needed
         and prior_clarification_question
         and clarification_question
-        and _normalize_text(clarification_question) == _normalize_text(prior_clarification_question)
+        and _is_repeated_clarification_question(prior_clarification_question, clarification_question)
     ):
         logger.warning("[clarify_query] Prevented repeated clarification question loop")
         clarification_needed = False
@@ -280,6 +322,7 @@ async def clarify_query(state: AgentState) -> AgentState:
         "query": effective_query,
         "clarification_needed": clarification_needed,
         "clarification_question": clarification_question,
+        "clarification_retry_count": clarification_retry_count + 1 if clarification_needed else 0,
         "conversation_history": updated_history,
         "gameplay_assumptions": assumptions,
     }
@@ -333,6 +376,16 @@ async def retrieve(state: AgentState) -> AgentState:
             "[retrieve] Split retrieval enabled. "
             f"root_hits={len(root_chunks)} link_hits={len(link_chunks)} merged={len(chunks)}"
         )
+
+        # Fallback for deployments where ingestion populated only the standard
+        # collection but split retrieval is enabled at query time.
+        if not chunks:
+            logger.warning(
+                "[retrieve] Split retrieval returned 0 chunks. "
+                "Falling back to standard collection query. "
+                "Check retrieval/ingestion collection config if this persists."
+            )
+            chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
     else:
         chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
 
@@ -346,69 +399,19 @@ async def retrieve(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Node 5: grade_documents
-# Filters out chunks that aren't actually relevant to the query
-# ---------------------------------------------------------------------------
-
-async def grade_documents(state: AgentState) -> AgentState:
-    """
-    Claude scores each retrieved chunk as relevant or not.
-    Only chunks that pass are kept in graded_chunks.
-
-    If nothing passes, clarification_needed is set to True
-    to trigger a rewrite loop or fallback.
-    """
-    logger.info(f"[grade_documents] Grading {len(state['retrieved_chunks'])} chunks")
-
-    chunks = state["retrieved_chunks"]
-    logger.info(f"[grade_documents] Grading {len(chunks)} chunks in one LLM call")
-
-    # Prepare a single grading request
-    user_payload = json.dumps({
-        "query": state["query"],
-        "chunks": [chunk["text"] for chunk in chunks]
-    })
-
-    await rate_limiter.wait_for_slot()
-    response = llm.complete(
-        system=GRADER_SYSTEM_PROMPT,
-        user=user_payload
-    )
-
-    # Expect JSON: {"relevant": [true/false, ...]}
-    parsed = _parse_json(response, "grade_documents")
-    relevant_list = parsed.get("relevant", [])
-    if not isinstance(relevant_list, list):
-        logger.error(f"[grade_documents] Expected a list for 'relevant', got: {relevant_list}")
-        relevant_list = []
-
-    graded = [chunk for chunk, is_relevant in zip(chunks, relevant_list) if is_relevant]
-    logger.info(f"[grade_documents] {len(graded)} chunks passed grading")
-
-    needs_retry = len(graded) == 0 and state.get("retry_count", 0) < 3
-
-    return {
-        **state,
-        "graded_chunks": graded,
-        "clarification_needed": needs_retry,
-        "retry_count": state.get("retry_count", 0) + 1,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Node 6: generate_answer
-# Produces the final answer from graded context chunks
+# Node 5: generate_answer
+# Produces the final answer from retrieved context chunks
 # ---------------------------------------------------------------------------
 
 async def generate_answer(state: AgentState) -> AgentState:
     """
-    Claude generates a grounded answer using only the graded chunks as context.
+    Claude generates a grounded answer using only the retrieved chunks as context.
     If no chunks are available (direct route or all filtered), it answers
     from its own knowledge with a disclaimer.
     """
     logger.info("[generate_answer] Generating final answer")
 
-    chunks = state.get("graded_chunks") or []
+    chunks = state.get("retrieved_chunks") or []
     history = state.get("conversation_history", [])
     assumptions_context = assumptions_block(_current_assumptions(state))
 

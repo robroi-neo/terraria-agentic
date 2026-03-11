@@ -8,7 +8,7 @@ from config import OLLAMA_MODEL, IS_DEVELOPMENT, GROQ_API_KEY
 
 # Very Hackish, idk too lazy to use langchain
 class LLMProvider:
-    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.2):
+    def __init__(self, model_name: str = OLLAMA_MODEL, temperature: float = 0.1):
         self.is_development = IS_DEVELOPMENT
         if self.is_development:
             self.model_name = model_name
@@ -69,7 +69,15 @@ class LLMProvider:
                     raise Exception(f"Groq API error: {response.status_code} {response.text}")
 
     def _clean_json(self, text: str) -> str:
+        # Prefer fenced code block if present
         match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
         if match:
             return match.group(1).strip()
+
+        # Otherwise, try to extract the first {...} JSON object
+        brace_match = re.search(r"\{[\s\S]*?\}", text)
+        if brace_match:
+            return brace_match.group(0).strip()
+
+        # Fallback: return original text (may still error downstream)
         return text.strip()

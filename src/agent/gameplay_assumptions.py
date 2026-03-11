@@ -5,7 +5,8 @@ from collections.abc import Mapping
 DEFAULT_GAMEPLAY_ASSUMPTIONS = {
     "difficulty": "Expert",
     "character": "Classic",
-    "player_class": "Ranger",
+    "player_class": "Melee",
+    "boss": "no boss defeated",
 }
 
 
@@ -52,6 +53,31 @@ def extract_from_text(text: str, current: Mapping[str, str]) -> dict[str, str]:
     elif reverse_character_match:
         updated["character"] = character_map[reverse_character_match.group(1)]
 
+    # Boss progression
+    boss_map = {
+        "no boss defeated": "no boss defeated",
+        "eye of cthulhu": "Eye of Cthulhu defeated",
+        "eater of worlds": "Eater of Worlds defeated",
+        "brain of cthulhu": "Brain of Cthulhu defeated",
+        "queen bee": "Queen Bee defeated",
+        "skeletron": "Skeletron defeated",
+        "wall of flesh": "Wall of Flesh defeated",
+        "queen slime": "Queen Slime defeated",
+        "the twins": "The Twins defeated",
+        "the destroyer": "The Destroyer defeated",
+        "skeletron prime": "Skeletron Prime defeated",
+        "plantera": "Plantera defeated",
+        "golem": "Golem defeated",
+        "duke fishron": "Duke Fishron defeated",
+        "empress of light": "Empress of Light defeated",
+        "lunatic cultist": "Lunatic Cultist defeated",
+        "moon lord": "Moon Lord defeated",
+    }
+    for raw, normalized in boss_map.items():
+        if re.search(rf"\b{re.escape(raw)}\b", lowered):
+            updated["boss"] = normalized
+            break
+
     # Combat class
     class_map = {
         "melee": "Melee",
@@ -71,5 +97,6 @@ def assumptions_block(assumptions: Mapping[str, str]) -> str:
         "Current gameplay assumptions (persisted across turns):\n"
         f"- Difficulty: {assumptions['difficulty']}\n"
         f"- Character: {assumptions['character']}\n"
-        f"- Class: {assumptions['player_class']}"
+        f"- Class: {assumptions['player_class']}\n"
+        f"- Boss progression: {assumptions.get('boss', 'no boss defeated')}"
     )

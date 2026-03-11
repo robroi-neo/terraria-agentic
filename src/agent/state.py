@@ -9,11 +9,11 @@ class Message(TypedDict):
     role: Literal["user", "assistant"]
     content: str
 
-
 class GameplayAssumptions(TypedDict):
     difficulty: str
     character: str
     player_class: str
+    boss: str
 
 class AgentState(TypedDict):
     # Set at start
@@ -22,16 +22,15 @@ class AgentState(TypedDict):
     # filled if progressively
     rewritten_query: str        # cleaned up version for retrieval
     retrieved_chunks: List[Dict]  # raw ChromaDB hits
-    graded_chunks: List[Dict]     # filtered relevant chunks
     generation: str               # final answer
 
     # control fields
-    retry_count: int              # loop guard
     route: Literal["rag", "direct"]
 
     # clarification_fields
     clarification_needed: bool          # only set if clarify_query runs
     clarification_question: str | None  # only set if query is insufficient
+    clarification_retry_count: int      # guard against repeated clarify loops
     
     # records convo history 
     conversation_history: List[Message] 
