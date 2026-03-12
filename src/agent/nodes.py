@@ -27,6 +27,7 @@ import time
 from src.agent.prompts import (
     ROUTER_SYSTEM_PROMPT,
     CLARIFIER_SYSTEM_PROMPT,
+    REWRITER_SYSTEM_PROMPT,
     GENERATOR_SYSTEM_PROMPT,
 )
 from src.agent.gameplay_assumptions import (
@@ -81,8 +82,18 @@ walkthrough_root_indexer = None
 walkthrough_links_indexer = None
 
 if RETRIEVAL_ENABLE_WALKTHROUGH_SPLIT:
-    walkthrough_root_indexer = ChromaIndexer(collection_name=RETRIEVAL_WALKTHROUGH_ROOT_COLLECTION)
-    walkthrough_links_indexer = ChromaIndexer(collection_name=RETRIEVAL_WALKTHROUGH_LINKS_COLLECTION)
+    root_collection = (RETRIEVAL_WALKTHROUGH_ROOT_COLLECTION or "").strip()
+    links_collection = (RETRIEVAL_WALKTHROUGH_LINKS_COLLECTION or "").strip()
+
+    if root_collection:
+        walkthrough_root_indexer = ChromaIndexer(collection_name=root_collection)
+    else:
+        logger.info("[retrieve:init] Walkthrough root collection disabled.")
+
+    if links_collection:
+        walkthrough_links_indexer = ChromaIndexer(collection_name=links_collection)
+    else:
+        logger.warning("[retrieve:init] Walkthrough links collection is empty. Split retrieval will be disabled.")
 
 
 def _chunk_dedupe_key(chunk: dict[str, Any]) -> tuple[Any, ...]:
@@ -94,16 +105,106 @@ def _chunk_dedupe_key(chunk: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _expand_with_related_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Expand top-k results with nearby chunks from the same page to improve
+    continuity for list-heavy or sectioned documents.
+    """
+    if not chunks:
+        return chunks
+
+    related_per_hit = 2
+    include_intro = True
+
+    expanded: list[dict[str, Any]] = list(chunks)
+    seen = {_chunk_dedupe_key(c) for c in expanded}
+
+    page_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+    def _pick_indexer(seed: dict[str, Any]) -> tuple[str, Any]:
+        role = seed.get("_retrieval_collection", "default")
+        if role == "root" and walkthrough_root_indexer:
+            return "root", walkthrough_root_indexer
+        if role == "links" and walkthrough_links_indexer:
+            return "links", walkthrough_links_indexer
+        return "default", indexer
+
+    for seed in chunks:
+        page_title = seed.get("page_title", "")
+        if not page_title:
+            continue
+
+        role, selected_indexer = _pick_indexer(seed)
+        cache_key = (role, page_title)
+        if cache_key not in page_cache:
+            page_cache[cache_key] = await selected_indexer.get_chunks_by_page_title(page_title)
+
+        same_page = page_cache[cache_key]
+        if not same_page:
+            continue
+
+        seed_section = _as_int(seed.get("section_index"), 0)
+        seed_chunk = _as_int(seed.get("chunk_index"), 0)
+
+        same_page_sorted = sorted(
+            same_page,
+            key=lambda c: (_as_int(c.get("section_index"), 0), _as_int(c.get("chunk_index"), 0)),
+        )
+
+        candidates: list[dict[str, Any]] = []
+
+        # Neighbor chunks in the same section (chunk_index +/- 1)
+        for c in same_page_sorted:
+            c_section = _as_int(c.get("section_index"), 0)
+            c_chunk = _as_int(c.get("chunk_index"), 0)
+            if c_section == seed_section and abs(c_chunk - seed_chunk) <= 1:
+                candidates.append(c)
+
+        # Also include page intro to keep high-level context when possible.
+        if include_intro:
+            for c in same_page_sorted:
+                if _as_int(c.get("chunk_index"), 0) == 0:
+                    candidates.append(c)
+                    break
+
+        added_for_seed = 0
+        for candidate in candidates:
+            candidate = dict(candidate)
+            candidate["_retrieval_collection"] = role
+            key = _chunk_dedupe_key(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            expanded.append(candidate)
+            added_for_seed += 1
+            if added_for_seed >= related_per_hit:
+                break
+
+    logger.info(
+        f"[retrieve] Related-chunk expansion: base={len(chunks)} expanded={len(expanded)}"
+    )
+    return expanded
+
+
 def _merge_ranked_chunks(root_chunks: list[dict[str, Any]], link_chunks: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     for chunk in root_chunks:
         adjusted = dict(chunk)
+        adjusted["_retrieval_collection"] = "root"
         adjusted["source_partition"] = adjusted.get("source_partition", "walkthrough_root")
         adjusted["adjusted_distance"] = float(adjusted.get("distance", 0.0)) - RETRIEVAL_WALKTHROUGH_ROOT_DISTANCE_BONUS
         ranked.append(adjusted)
 
     for chunk in link_chunks:
         adjusted = dict(chunk)
+        adjusted["_retrieval_collection"] = "links"
         adjusted["source_partition"] = adjusted.get("source_partition", "walkthrough_links")
         adjusted["adjusted_distance"] = float(adjusted.get("distance", 0.0))
         ranked.append(adjusted)
@@ -335,11 +436,39 @@ async def clarify_query(state: AgentState) -> AgentState:
 
 async def rewrite_query(state: AgentState) -> AgentState:
     """
-    Pass-through node: keep the graph shape stable without LLM rewriting.
+    Rewrite the user query into a retrieval-optimized form while preserving intent.
+    Falls back to the original query if rewrite parsing fails.
     """
-    rewritten = state["query"].strip()
-    logger.info(f"[rewrite_query] Rewriter disabled. Using query unchanged: '{rewritten}'")
+    original_query = state["query"].strip()
+    history = state.get("conversation_history", [])
+    assumptions_context = assumptions_block(_current_assumptions(state))
 
+    history_block = f"Conversation so far:\n{json.dumps(history)}\n\n" if history else ""
+    user_message = (
+        f"{assumptions_context}\n\n"
+        f"{history_block}"
+        "Latest user question:\n"
+        f"{original_query}\n\n"
+        "Rewrite this into a retrieval query. Return JSON only."
+    )
+
+    rewritten = original_query
+    try:
+        await rate_limiter.wait_for_slot()
+        response = llm.complete(
+            system=REWRITER_SYSTEM_PROMPT,
+            user=user_message,
+        )
+        parsed = _parse_json(response, "rewrite_query")
+        candidate = (parsed.get("rewritten_query") or "").strip()
+        if candidate:
+            rewritten = candidate
+        else:
+            logger.warning("[rewrite_query] Empty rewritten_query; falling back to original query")
+    except Exception as exc:
+        logger.warning(f"[rewrite_query] Rewrite failed, using original query. Error: {exc}")
+
+    logger.info(f"[rewrite_query] Rewritten query: '{rewritten}'")
     return {**state, "rewritten_query": rewritten}
 
 
@@ -362,20 +491,33 @@ async def retrieve(state: AgentState) -> AgentState:
     query_vector = embedder.embed_query(query_text)
 
     # Fetch top-K chunks from ChromaDB.
-    if RETRIEVAL_ENABLE_WALKTHROUGH_SPLIT and walkthrough_root_indexer and walkthrough_links_indexer:
-        root_chunks = await walkthrough_root_indexer.query(
-            query_vector,
-            n_results=RETRIEVAL_WALKTHROUGH_ROOT_TOP_K,
-        )
+    if RETRIEVAL_ENABLE_WALKTHROUGH_SPLIT and walkthrough_links_indexer:
+        root_chunks = []
+        if walkthrough_root_indexer:
+            root_chunks = await walkthrough_root_indexer.query(
+                query_vector,
+                n_results=RETRIEVAL_WALKTHROUGH_ROOT_TOP_K,
+            )
+
         link_chunks = await walkthrough_links_indexer.query(
             query_vector,
             n_results=RETRIEVAL_WALKTHROUGH_LINKS_TOP_K,
         )
-        chunks = _merge_ranked_chunks(root_chunks, link_chunks, RETRIEVAL_TOP_K)
-        logger.info(
-            "[retrieve] Split retrieval enabled. "
-            f"root_hits={len(root_chunks)} link_hits={len(link_chunks)} merged={len(chunks)}"
-        )
+
+        if walkthrough_root_indexer:
+            chunks = _merge_ranked_chunks(root_chunks, link_chunks, RETRIEVAL_TOP_K)
+            logger.info(
+                "[retrieve] Split retrieval enabled. "
+                f"root_hits={len(root_chunks)} link_hits={len(link_chunks)} merged={len(chunks)}"
+            )
+        else:
+            chunks = link_chunks[:RETRIEVAL_TOP_K]
+            for chunk in chunks:
+                chunk["_retrieval_collection"] = "links"
+            logger.info(
+                "[retrieve] Split retrieval (links-only) enabled. "
+                f"link_hits={len(link_chunks)} returned={len(chunks)}"
+            )
 
         # Fallback for deployments where ingestion populated only the standard
         # collection but split retrieval is enabled at query time.
@@ -388,6 +530,13 @@ async def retrieve(state: AgentState) -> AgentState:
             chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
     else:
         chunks = await indexer.query(query_vector, n_results=RETRIEVAL_TOP_K)
+        for chunk in chunks:
+            chunk["_retrieval_collection"] = "default"
+
+    chunks = await _expand_with_related_chunks(chunks)
+
+    for chunk in chunks:
+        chunk.pop("_retrieval_collection", None)
 
     logger.info(f"[retrieve] Retrieved {len(chunks)} chunks")
     for i, chunk in enumerate(chunks):
