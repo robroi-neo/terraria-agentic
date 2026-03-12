@@ -16,6 +16,7 @@ IS_DEVELOPMENT = ENV == "development"
 
 # Ollama
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3")
+GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # EMBEDDER MODEL
 EMBEDDER_MODEL: str = os.getenv("EMBEDDER_MODEL", "")
