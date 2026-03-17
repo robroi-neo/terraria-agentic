@@ -1,9 +1,9 @@
 """
-Integration test: embed a query and retrieve top-k chunks from ChromaDB.
+Integration test/CLI: run retrieval via src.agent.nodes.retrieve (production path).
 
 Usage:
-    python -m pytest tests/ingestion/test_embedder_query_retrieval.py -q
-    python -m tests.ingestion.test_embedder_query_retrieval
+    python -m pytest tests/ingestion/test_embedder_query_retrieval_agent.py -q
+    python -m tests.ingestion.test_embedder_query_retrieval_agent
 
 Optional env overrides:
     TEST_RETRIEVAL_QUERY="how to summon eye of cthulhu"
@@ -19,44 +19,39 @@ except Exception:  # pragma: no cover - fallback for older/newer package layouts
     class InvalidArgumentError(Exception):
         pass
 
-from src.ingestion.embedder import BGEEmbedder
-from src.ingestion.indexer import ChromaIndexer
+from src.agent.nodes import retrieve
+from src.agent.gameplay_assumptions import DEFAULT_GAMEPLAY_ASSUMPTIONS
 
 
 def _run(coro):
     return asyncio.run(coro)
 
 
-def _create_clients() -> tuple[ChromaIndexer, BGEEmbedder, int]:
-    indexer = ChromaIndexer()
-    total_chunks = _run(indexer.count())
-    if total_chunks == 0:
-        raise RuntimeError("ChromaDB collection is empty. Run ingestion first.")
-
-    embedder = BGEEmbedder()
-    return indexer, embedder, total_chunks
-
-
-def _retrieve_top_k(indexer: ChromaIndexer, embedder: BGEEmbedder, query: str, top_k: int, total_chunks: int) -> tuple[list[dict], int]:
-    if top_k <= 0:
-        raise ValueError("top_k must be > 0")
-
-    query_vector = embedder.embed_query(query)
-    n_results = min(top_k, total_chunks)
-    results = _run(indexer.query(query_vector, n_results=n_results))
-    return results, n_results
+def _build_state(query: str) -> dict:
+    return {
+        "query": query,
+        "rewritten_query": "",
+        "retrieved_chunks": [],
+        "graded_chunks": [],
+        "generation": "",
+        "retry_count": 0,
+        "route": "rag",
+        "clarification_needed": False,
+        "clarification_question": None,
+        "clarification_retry_count": 0,
+        "conversation_history": [],
+        "gameplay_assumptions": dict(DEFAULT_GAMEPLAY_ASSUMPTIONS),
+    }
 
 
-def _retrieve_top_k_for_test() -> tuple[list[dict], int, str, int]:
-    query = os.getenv("TEST_RETRIEVAL_QUERY", "how do i get the space gun")
-    top_k = int(os.getenv("TEST_RETRIEVAL_TOP_K", "5"))
-    indexer, embedder, total_chunks = _create_clients()
-    results, n_results = _retrieve_top_k(indexer, embedder, query, top_k, total_chunks)
-    return results, n_results, query, total_chunks
+def _retrieve_via_agent(query: str) -> list[dict]:
+    state = _build_state(query)
+    result_state = _run(retrieve(state))
+    return result_state.get("retrieved_chunks", [])
 
 
 def _print_hits(hits: list[dict], top_k: int) -> None:
-    print(f"\nTop {len(hits)} / requested {top_k} results")
+    print(f"\nTop {len(hits)} / requested {top_k} results (agent retrieve)")
     for i, hit in enumerate(hits, start=1):
         title = hit.get("page_title", "[No Title]")
         section = hit.get("section_title", "[No Section]")
@@ -71,10 +66,8 @@ def _print_hits(hits: list[dict], top_k: int) -> None:
 
 def _run_interactive_cli() -> None:
     default_top_k = int(os.getenv("TEST_RETRIEVAL_TOP_K", "5"))
-    indexer, embedder, total_chunks = _create_clients()
 
-    print("Embedder retrieval console")
-    print(f"Collection size: {total_chunks}")
+    print("Agent retrieval console (uses src.agent.nodes.retrieve)")
     print("Type a query and press Enter. Type 'quit' or 'exit' to stop.")
 
     while True:
@@ -89,7 +82,7 @@ def _run_interactive_cli() -> None:
         top_k = default_top_k if not raw_k else int(raw_k)
 
         try:
-            hits, _ = _retrieve_top_k(indexer, embedder, raw_query, top_k, total_chunks)
+            hits = _retrieve_via_agent(raw_query)
         except InvalidArgumentError as exc:
             if "dimension" in str(exc).lower():
                 print(
@@ -99,14 +92,16 @@ def _run_interactive_cli() -> None:
                 break
             raise
 
-        _print_hits(hits, top_k)
+        _print_hits(hits[:top_k], top_k)
 
 
-def test_embedder_query_returns_top_k_chunks():
+def test_agent_retrieve_returns_chunks():
     import pytest
 
+    query = os.getenv("TEST_RETRIEVAL_QUERY", "how do i get the space gun")
+
     try:
-        results, n_results, _, _ = _retrieve_top_k_for_test()
+        results = _retrieve_via_agent(query)
     except InvalidArgumentError as exc:
         if "dimension" in str(exc).lower():
             pytest.skip(
@@ -114,13 +109,8 @@ def test_embedder_query_returns_top_k_chunks():
                 "Re-run ingestion with this model or switch EMBEDDER_MODEL to match the existing index."
             )
         raise
-    except RuntimeError as exc:
-        if "empty" in str(exc).lower():
-            pytest.skip(str(exc))
-        raise
 
     assert results, "Expected at least one retrieval result"
-    assert len(results) == n_results
     assert all((hit.get("text") or "").strip() for hit in results)
     assert all((hit.get("page_title") or "").strip() for hit in results)
 
