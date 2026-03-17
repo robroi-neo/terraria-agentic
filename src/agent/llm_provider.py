@@ -4,7 +4,7 @@ import time
 import logging
 import requests
 import ollama
-from config import OLLAMA_MODEL, IS_DEVELOPMENT, GROQ_API_KEY
+from config import OLLAMA_MODEL, GROQ_MODEL, IS_DEVELOPMENT, GROQ_API_KEY
 
 # Very Hackish, idk too lazy to use langchain
 class LLMProvider:
@@ -13,7 +13,7 @@ class LLMProvider:
         if self.is_development:
             self.model_name = model_name
         else:
-            self.model_name = "llama-3.3-70b-versatile"
+            self.model_name = GROQ_MODEL
         self.temperature = temperature
 
 
