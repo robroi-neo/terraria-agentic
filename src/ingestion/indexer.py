@@ -16,7 +16,6 @@ class ChromaIndexer:
         persist_directory: str = CHROMADB_PATH,
         collection_name: str = CHROMADB_COLLECTION
     ):
-        # PersistentClient is the correct API for chromadb >= 0.4.x
         # This writes to disk at `persist_directory` automatically.
         self.client = chromadb.PersistentClient(path=persist_directory)
         self.collection = self.client.get_or_create_collection(collection_name)
@@ -99,6 +98,35 @@ class ChromaIndexer:
 
         logger.info(f"ChromaDB query returned {len(hits)} results")
         return hits
+
+    async def get_chunks_by_page_title(
+        self,
+        page_title: str,
+        limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch chunks for a given page_title from the collection.
+        Useful for expanding retrieval results with neighboring chunks.
+        """
+        results = self.collection.get(
+            where={"page_title": page_title},
+            limit=limit,
+            include=["documents", "metadatas"],
+        )
+
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+
+        chunks: List[Dict[str, Any]] = []
+        for doc, meta in zip(documents, metadatas):
+            hit = dict(meta or {})
+            hit["text"] = doc or ""
+            chunks.append(hit)
+
+        logger.info(
+            f"Fetched {len(chunks)} chunks for page_title='{page_title}'"
+        )
+        return chunks
 
     async def count(self) -> int:
         """
